@@ -1,0 +1,1 @@
+export const awsConfig = { Auth: { Cognito: { userPoolId: "us-east-1_aQyubZnZS", userPoolClientId: "3sfqd04nehcblnver7gs5mafnf" } } };
