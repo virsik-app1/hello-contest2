@@ -2,7 +2,7 @@ import { Amplify } from "aws-amplify";
 import { Authenticator } from "@aws-amplify/ui-react";
 import "@aws-amplify/ui-react/styles.css";
 import { awsConfig } from "./aws-config";
-import { useState, useMemo, useEffect, useCallback } from "react";
+import { useState, useMemo, useEffect } from "react";
 
 Amplify.configure(awsConfig);
 
@@ -113,7 +113,7 @@ function buildStats(members, outreachLog) {
 const TABS = ["Dashboard", "Outreach", "Analytics"];
 
 export default function App() {
-  const [members, setMembers]         = useState(initialMembers);
+  const [members]                     = useState(initialMembers);
   const [selected, setSelected]       = useState(null);
   const [aiResults, setAiResults]     = useState({});
   const [loading, setLoading]         = useState({});
@@ -127,6 +127,7 @@ export default function App() {
   const [smsSent, setSmsSent]         = useState(new Set());
   const [toast, setToast]             = useState(null);
   const [dataLoading, setDataLoading] = useState(true);
+  const [search, setSearch]           = useState("");
 
   // ── Load persisted data from DynamoDB on mount ────────────────────────────
   useEffect(() => {
@@ -176,10 +177,45 @@ export default function App() {
     loadData();
   }, []);
 
+  // ── Close the member modal with the Escape key (accessibility) ────────────
+  useEffect(() => {
+    if (!modalMember) return;
+    const onKey = (e) => { if (e.key === "Escape") setModalMember(null); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [modalMember]);
+
   // ── Helpers ────────────────────────────────────────────────────────────────
   function showToast(msg) {
     setToast(msg);
     setTimeout(() => setToast(null), 3000);
+  }
+
+  // ── Export helper: turn rows into a downloadable CSV file ──────────────────
+  function downloadCSV(filename, headers, rows) {
+    const esc = (v) => `"${String(v ?? "").replace(/"/g, '""')}"`;
+    const csv = [headers.map(esc).join(","), ...rows.map(r => r.map(esc).join(","))].join("\n");
+    const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8;" }));
+    const a = document.createElement("a");
+    a.href = url; a.download = filename; a.click();
+    URL.revokeObjectURL(url);
+    showToast(`⬇ Exported ${filename}`);
+  }
+
+  function exportMembersCSV() {
+    downloadCSV(
+      "pulseretain-members.csv",
+      ["Name", "Plan", "Risk", "Score", "Last Visit", "Usual Schedule", "Value/mo", "Missed Payments"],
+      filteredMembers.map(m => [m.name, m.plan, riskConfig[m.risk].label, (aiResults[m.id]?.score ?? m.score), m.lastVisit, m.usualVisits, m.value, m.missedPayments])
+    );
+  }
+
+  function exportOutreachCSV() {
+    downloadCSV(
+      "pulseretain-outreach.csv",
+      ["Member", "Plan", "Value/mo", "Sent At", "Status", "Message"],
+      outreachLog.map(l => [l.memberName, l.plan, l.value, l.sentAt, l.status, l.message])
+    );
   }
 
   async function markOutreach(member, ai) {
@@ -257,7 +293,7 @@ export default function App() {
         const result = await runClaudeAnalysis(m);
         setAiResults(prev => ({ ...prev, [m.id]: result }));
       } catch {
-        setAiResults(prev => ({ ...prev, [m.id]: { error: "Analysis failed — check API key." } }));
+        setAiResults(prev => ({ ...prev, [m.id]: { error: "Couldn't reach the AI just now. Please try again." } }));
       }
       setLoading(prev => ({ ...prev, [m.id]: false }));
     }
@@ -271,7 +307,7 @@ export default function App() {
       const result = await runClaudeAnalysis(member);
       setAiResults(prev => ({ ...prev, [member.id]: result }));
     } catch {
-      setAiResults(prev => ({ ...prev, [member.id]: { error: "Analysis failed — check API key." } }));
+      setAiResults(prev => ({ ...prev, [member.id]: { error: "Couldn't reach the AI just now. Please try again." } }));
     }
     setLoading(prev => ({ ...prev, [member.id]: false }));
   };
@@ -279,10 +315,13 @@ export default function App() {
   // ── Derived data ───────────────────────────────────────────────────────────
   const stats = useMemo(() => buildStats(members, outreachLog), [members, outreachLog]);
 
-  const filteredMembers = useMemo(() =>
-    filterRisk === "all" ? members : members.filter(m => m.risk === filterRisk),
-    [members, filterRisk]
-  );
+  const filteredMembers = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return members.filter(m =>
+      (filterRisk === "all" || m.risk === filterRisk) &&
+      (q === "" || m.name.toLowerCase().includes(q))
+    );
+  }, [members, filterRisk, search]);
 
   const analyticsData = useMemo(() => {
     const riskCounts   = { high: 0, medium: 0, low: 0 };
@@ -353,7 +392,7 @@ export default function App() {
 
           {/* ── Toast ── */}
           {toast && (
-            <div style={{ position: "fixed", bottom: 28, left: "50%", transform: "translateX(-50%)", background: "#1a1a2e", color: "#fff", padding: "10px 22px", borderRadius: 10, fontSize: 13, fontWeight: 600, zIndex: 9999, boxShadow: "0 4px 20px rgba(0,0,0,0.3)" }}>
+            <div role="status" aria-live="polite" style={{ position: "fixed", bottom: 28, left: "50%", transform: "translateX(-50%)", background: "#1a1a2e", color: "#fff", padding: "10px 22px", borderRadius: 10, fontSize: 13, fontWeight: 600, zIndex: 9999, boxShadow: "0 4px 20px rgba(0,0,0,0.3)" }}>
               {toast}
             </div>
           )}
@@ -369,14 +408,25 @@ export default function App() {
                 <div style={{ marginBottom: 28, display: "flex", flexDirection: "row", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 16 }}>
                   <div>
                     <h1 style={{ margin: 0, fontSize: 26, fontWeight: 700, color: "#1a1a2e" }}>Member Retention Dashboard</h1>
-                    <p style={{ margin: "4px 0 0", color: "#888", fontSize: 14 }}>Pulse Studio · May 2026 · 150 active members</p>
+                    <p style={{ margin: "4px 0 0", color: "#888", fontSize: 14 }}>Pulse Studio · {members.length} active members</p>
                   </div>
-                  <div style={{ display: "flex", gap: 10 }}>
+                  <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+                    {/* Search */}
+                    <input
+                      type="text"
+                      value={search}
+                      onChange={e => setSearch(e.target.value)}
+                      placeholder="Search members…"
+                      aria-label="Search members by name"
+                      style={{ padding: "8px 12px", borderRadius: 20, border: "1px solid #ddd", fontSize: 12, outline: "none", minWidth: 150 }}
+                    />
                     {/* Filter pills */}
                     {["all","high","medium","low"].map(f => (
                       <button
                         key={f}
                         onClick={() => setFilterRisk(f)}
+                        aria-label={`Filter members by ${f === "all" ? "all" : f} risk`}
+                        aria-pressed={filterRisk === f}
                         style={{
                           padding: "7px 14px", borderRadius: 20, fontSize: 12, cursor: "pointer",
                           border: filterRisk === f ? "none" : "1px solid #ddd",
@@ -400,6 +450,11 @@ export default function App() {
                         whiteSpace: "nowrap",
                       }}
                     >{analyzing ? "⏳ Analyzing..." : "⚡ Run AI Analysis"}</button>
+                    <button
+                      onClick={exportMembersCSV}
+                      aria-label="Export member list as CSV"
+                      style={{ background: "#fff", color: "#1a1a2e", border: "1px solid #ddd", borderRadius: 10, padding: "10px 16px", fontSize: 13, fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap" }}
+                    >⬇ Export CSV</button>
                   </div>
                 </div>
 
@@ -430,6 +485,11 @@ export default function App() {
                     ))}
                   </div>
 
+                  {filteredMembers.length === 0 && (
+                    <div style={{ padding: "40px 24px", textAlign: "center", color: "#888", fontSize: 13 }}>
+                      No members match this filter or search.
+                    </div>
+                  )}
                   {filteredMembers.map(m => {
                     const rc        = riskConfig[m.risk];
                     const isSelected = selected === m.id;
@@ -449,7 +509,8 @@ export default function App() {
                             <div style={{ width: 34, height: 34, borderRadius: "50%", background: rc.bg, color: rc.color, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, fontWeight: 700, flexShrink: 0, border: `1.5px solid ${rc.border}` }}>{m.initials}</div>
                             <div>
                               <span style={{ fontSize: 14, fontWeight: 600, color: "#1a1a2e", display: "block" }}>{m.name}</span>
-                              {ai && <span style={{ fontSize: 11, color: "#27ae60", fontWeight: 600 }}>✓ AI analyzed</span>}
+                              {ai && !ai.error && <span style={{ fontSize: 11, color: "#27ae60", fontWeight: 600 }}>✓ AI analyzed</span>}
+                              {ai && ai.error && <span style={{ fontSize: 11, color: "#c0392b", fontWeight: 600 }}>⚠ analysis failed</span>}
                               {isLoading && <span style={{ fontSize: 11, color: "#f39c12" }}>⏳ analyzing...</span>}
                               {logged && <span style={{ fontSize: 11, color: "#185fa5", fontWeight: 600 }}>📨 outreach sent</span>}
                               {scheduled && <span style={{ fontSize: 11, color: "#8e44ad" }}> · ⏰ follow-up scheduled</span>}
@@ -460,9 +521,9 @@ export default function App() {
                           <span style={{ fontSize: 12, color: "#888", display: "flex", alignItems: "center" }}>{m.usualVisits}</span>
                           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                             <div style={{ flex: 1, height: 6, background: "#f0f0f0", borderRadius: 3, overflow: "hidden" }}>
-                              <div style={{ width: `${ai ? ai.score : m.score}%`, height: "100%", background: rc.bar, borderRadius: 3, transition: "width 0.6s ease" }} />
+                              <div style={{ width: `${ai && !ai.error ? ai.score : m.score}%`, height: "100%", background: rc.bar, borderRadius: 3, transition: "width 0.6s ease" }} />
                             </div>
-                            <span style={{ fontSize: 12, fontWeight: 600, color: rc.color, minWidth: 28 }}>{ai ? ai.score : m.score}</span>
+                            <span style={{ fontSize: 12, fontWeight: 600, color: rc.color, minWidth: 28 }}>{ai && !ai.error ? ai.score : m.score}</span>
                           </div>
                           <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                             <span style={{ background: rc.bg, color: rc.color, fontSize: 11, fontWeight: 600, padding: "3px 10px", borderRadius: 20, border: `1px solid ${rc.border}` }}>{rc.label}</span>
@@ -474,7 +535,7 @@ export default function App() {
                                 Analyze
                               </button>
                             )}
-                            {ai && !logged && (
+                            {ai && !ai.error && !logged && (
                               <button onClick={() => markOutreach(m, ai)} style={{ fontSize: 10, background: "#e8f4fd", border: "1px solid #b3d9f5", color: "#185fa5", borderRadius: 6, padding: "3px 8px", cursor: "pointer", fontWeight: 600 }}>
                                 Log Send
                               </button>
@@ -490,6 +551,11 @@ export default function App() {
                           <div style={{ padding: "16px 24px 20px", background: "#fafbff", borderBottom: "1px solid #f0f0f0" }}>
                             {isLoading ? (
                               <p style={{ margin: 0, fontSize: 13, color: "#f39c12" }}>⏳ Claude is analyzing {m.name.split(" ")[0]}...</p>
+                            ) : ai && ai.error ? (
+                              <div style={{ background: "#fff1f1", border: "1px solid #fbc9c9", borderRadius: 10, padding: "14px 16px" }}>
+                                <p style={{ margin: "0 0 8px", fontSize: 13, color: "#c0392b", fontWeight: 600 }}>⚠ {ai.error}</p>
+                                <button onClick={() => analyzeOne(m)} style={{ background: "linear-gradient(135deg,#e74c3c,#c0392b)", color: "#fff", border: "none", borderRadius: 8, padding: "7px 16px", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>↻ Try again</button>
+                              </div>
                             ) : ai ? (
                               <div>
                                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 14, marginBottom: 14 }}>
@@ -573,9 +639,14 @@ export default function App() {
             ════════════════════════════════════════════════════════════ */}
             {activeTab === "Outreach" && (
               <>
-                <div style={{ marginBottom: 24 }}>
-                  <h1 style={{ margin: 0, fontSize: 26, fontWeight: 700, color: "#1a1a2e" }}>Outreach Log</h1>
-                  <p style={{ margin: "4px 0 0", color: "#888", fontSize: 14 }}>Track every message sent and its outcome</p>
+                <div style={{ marginBottom: 24, display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 12 }}>
+                  <div>
+                    <h1 style={{ margin: 0, fontSize: 26, fontWeight: 700, color: "#1a1a2e" }}>Outreach Log</h1>
+                    <p style={{ margin: "4px 0 0", color: "#888", fontSize: 14 }}>Track every message sent and its outcome</p>
+                  </div>
+                  {outreachLog.length > 0 && (
+                    <button onClick={exportOutreachCSV} aria-label="Export outreach log as CSV" style={{ background: "#fff", color: "#1a1a2e", border: "1px solid #ddd", borderRadius: 10, padding: "10px 16px", fontSize: 13, fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap" }}>⬇ Export CSV</button>
+                  )}
                 </div>
 
                 {outreachLog.length === 0 ? (
@@ -729,14 +800,14 @@ export default function App() {
             const ai = aiResults[m.id];
             return (
               <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 200 }} onClick={() => setModalMember(null)}>
-                <div style={{ background: "#fff", borderRadius: 16, padding: "28px 32px", maxWidth: 480, width: "90%", boxShadow: "0 20px 60px rgba(0,0,0,0.2)" }} onClick={e => e.stopPropagation()}>
+                <div role="dialog" aria-modal="true" aria-label={`Member details for ${m.name}`} style={{ background: "#fff", borderRadius: 16, padding: "28px 32px", maxWidth: 480, width: "90%", boxShadow: "0 20px 60px rgba(0,0,0,0.2)" }} onClick={e => e.stopPropagation()}>
                   <div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 20 }}>
                     <div style={{ width: 48, height: 48, borderRadius: "50%", background: rc.bg, color: rc.color, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16, fontWeight: 700, border: `2px solid ${rc.border}` }}>{m.initials}</div>
                     <div>
                       <p style={{ margin: 0, fontSize: 18, fontWeight: 700, color: "#1a1a2e" }}>{m.name}</p>
                       <p style={{ margin: "2px 0 0", fontSize: 13, color: "#888" }}>{m.plan} · ${m.value}/mo</p>
                     </div>
-                    <button onClick={() => setModalMember(null)} style={{ marginLeft: "auto", background: "none", border: "none", fontSize: 20, cursor: "pointer", color: "#aaa" }}>×</button>
+                    <button onClick={() => setModalMember(null)} aria-label="Close member details" style={{ marginLeft: "auto", background: "none", border: "none", fontSize: 20, cursor: "pointer", color: "#aaa" }}>×</button>
                   </div>
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 16 }}>
                     {[
@@ -753,7 +824,7 @@ export default function App() {
                       </div>
                     ))}
                   </div>
-                  {ai ? (
+                  {ai && !ai.error ? (
                     <div style={{ background: "#fff8e1", border: "1px solid #fde8a8", borderRadius: 10, padding: "12px 14px" }}>
                       <p style={{ margin: "0 0 4px", fontSize: 11, fontWeight: 600, color: "#b7770d", textTransform: "uppercase", letterSpacing: 0.5 }}>AI Churn Insight</p>
                       <p style={{ margin: 0, fontSize: 13, color: "#555", lineHeight: 1.6 }}>{ai.reason}</p>
