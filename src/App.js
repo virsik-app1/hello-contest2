@@ -83,12 +83,44 @@ async function sendRealSMS(toPhone, message) {
   return data;
 }
 
+// ─── Claude reply drafting (conversational retention) ────────────────────────
+// Reuses the secure Lambda. Requires a "draft_reply" action on the Lambda
+// (see docs/REPLY_FEATURE_BACKEND.md). No API key ever touches the browser.
+async function runClaudeReply(member, originalMessage, memberReply) {
+  const response = await fetch(LAMBDA_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      action: "draft_reply",
+      memberId: member.id,
+      model: "claude-haiku-4-5-20251001",
+      max_tokens: 500,
+      messages: [{
+        role: "user",
+        content: `You are a fitness studio owner's retention assistant. A member is at risk of cancelling. The studio already texted them this win-back message: "${originalMessage}". The member just replied: "${memberReply}".
+
+Write the studio's next text back. Be warm, human, and specific to what they said — never pushy. If they raise a real obstacle (cost, time, injury, moving away), respond with empathy and offer a fair option. Respond with ONLY a raw JSON object — no markdown, no backticks:
+
+{"sentiment":"positive|neutral|hesitant|leaving","reply":"the studio's reply text, under 300 characters","suggestedOffer":"class_credit|discount_percent|free_guest_pass|personal_trainer_intro|pause_membership|none","nextStep":"one short sentence telling the owner what to do next"}
+
+Member: ${member.name}, on ${member.plan} ($${member.value}/mo), ${member.joinedMonths} months as a member.`
+      }]
+    })
+  });
+  const data = await response.json();
+  const raw = data.content.filter(b => b.type === "text").map(b => b.text).join("").trim();
+  const match = raw.match(/\{[\s\S]*\}/);
+  if (!match) throw new Error("No JSON in response");
+  return JSON.parse(match[0]);
+}
+
 // ─── Offer badge labels ───────────────────────────────────────────────────────
 const offerLabels = {
   class_credit:            "🎟 Free Class Credit",
   discount_percent:        "💸 10% Discount",
   free_guest_pass:         "👥 Guest Pass",
   personal_trainer_intro:  "💪 PT Session",
+  pause_membership:        "⏸ Offer to Pause",
   none:                    null,
 };
 
@@ -128,6 +160,10 @@ export default function App() {
   const [toast, setToast]             = useState(null);
   const [dataLoading, setDataLoading] = useState(true);
   const [search, setSearch]           = useState("");
+  const [replyText, setReplyText]       = useState({});   // member's pasted reply, keyed by member id
+  const [replyDrafts, setReplyDrafts]   = useState({});   // Claude's drafted response, keyed by member id
+  const [replyLoading, setReplyLoading] = useState({});
+  const [replySending, setReplySending] = useState({});
 
   // ── Load persisted data from DynamoDB on mount ────────────────────────────
   useEffect(() => {
@@ -281,6 +317,41 @@ export default function App() {
       showToast(`❌ SMS failed: ${err.message}`);
     }
     setSmsSending(prev => ({ ...prev, [member.id]: false }));
+  }
+
+  // ── Conversational retention: draft a reply to a member's response ──────────
+  async function draftReply(member, ai) {
+    const text = (replyText[member.id] || "").trim();
+    if (!text) { showToast("Type the member's reply first"); return; }
+    setReplyLoading(prev => ({ ...prev, [member.id]: true }));
+    try {
+      const draft = await runClaudeReply(member, ai?.message || "(prior outreach)", text);
+      setReplyDrafts(prev => ({ ...prev, [member.id]: draft }));
+    } catch {
+      setReplyDrafts(prev => ({ ...prev, [member.id]: { error: "Couldn't draft a reply just now. Please try again." } }));
+    }
+    setReplyLoading(prev => ({ ...prev, [member.id]: false }));
+  }
+
+  async function sendReplySMS(member) {
+    const draft = replyDrafts[member.id];
+    if (!draft || draft.error) return;
+    if (!member.phone) { showToast("❌ No phone number on file for " + member.name.split(" ")[0]); return; }
+    setReplySending(prev => ({ ...prev, [member.id]: true }));
+    try {
+      await sendRealSMS(member.phone, draft.reply);
+      showToast(`📱 Reply sent to ${member.name.split(" ")[0]}!`);
+    } catch (err) {
+      showToast(`❌ Reply failed: ${err.message}`);
+    }
+    setReplySending(prev => ({ ...prev, [member.id]: false }));
+  }
+
+  function copyReply(member) {
+    const draft = replyDrafts[member.id];
+    if (!draft || draft.error) return;
+    if (navigator.clipboard) navigator.clipboard.writeText(draft.reply);
+    showToast("📋 Reply copied");
   }
 
   // ── AI calls ───────────────────────────────────────────────────────────────
@@ -616,6 +687,53 @@ export default function App() {
                                   )}
                                 </div>
                                 <p style={{ margin: "10px 0 0", fontSize: 11, color: "#bbb" }}>SMS sent live via Twilio · Claude AI analysis</p>
+
+                                {/* ── Conversational retention: handle the member's reply ── */}
+                                <div style={{ marginTop: 16, paddingTop: 16, borderTop: "1px dashed #e0e0e0" }}>
+                                  <p style={{ margin: "0 0 8px", fontSize: 11, fontWeight: 600, color: "#8e44ad", textTransform: "uppercase", letterSpacing: 0.5 }}>💬 Member replied? Let Claude handle the conversation</p>
+                                  <textarea
+                                    value={replyText[m.id] || ""}
+                                    onChange={e => setReplyText(prev => ({ ...prev, [m.id]: e.target.value }))}
+                                    placeholder={`Paste ${m.name.split(" ")[0]}'s reply — e.g. "Honestly it's just gotten too expensive for me right now."`}
+                                    aria-label={`Reply received from ${m.name}`}
+                                    rows={2}
+                                    style={{ width: "100%", boxSizing: "border-box", border: "1px solid #e0d3f5", borderRadius: 8, padding: "10px 12px", fontSize: 13, fontFamily: "inherit", resize: "vertical", outline: "none" }}
+                                  />
+                                  <button
+                                    onClick={() => draftReply(m, ai)}
+                                    disabled={replyLoading[m.id]}
+                                    style={{ marginTop: 8, background: replyLoading[m.id] ? "#ccc" : "linear-gradient(135deg,#8e44ad,#6c3483)", color: "#fff", border: "none", borderRadius: 8, padding: "8px 16px", fontSize: 12, fontWeight: 600, cursor: replyLoading[m.id] ? "not-allowed" : "pointer" }}
+                                  >
+                                    {replyLoading[m.id] ? "⏳ Claude is drafting..." : "✨ Draft AI Reply"}
+                                  </button>
+
+                                  {replyDrafts[m.id] && replyDrafts[m.id].error && (
+                                    <p style={{ margin: "10px 0 0", fontSize: 12, color: "#c0392b" }}>⚠ {replyDrafts[m.id].error}</p>
+                                  )}
+
+                                  {replyDrafts[m.id] && !replyDrafts[m.id].error && (() => {
+                                    const d = replyDrafts[m.id];
+                                    const sc = { positive:{bg:"#f0faf4",c:"#1e7e45"}, neutral:{bg:"#eef2f7",c:"#555"}, hesitant:{bg:"#fffbf0",c:"#b7770d"}, leaving:{bg:"#fff1f1",c:"#c0392b"} }[d.sentiment] || { bg:"#eef2f7", c:"#555" };
+                                    return (
+                                      <div style={{ marginTop: 12, background: "#faf7ff", border: "1px solid #e0d3f5", borderRadius: 10, padding: "12px 14px" }}>
+                                        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8, flexWrap: "wrap" }}>
+                                          <span style={{ background: sc.bg, color: sc.c, fontSize: 11, fontWeight: 600, padding: "2px 9px", borderRadius: 20, textTransform: "capitalize" }}>{d.sentiment || "reply"}</span>
+                                          {d.suggestedOffer && offerLabels[d.suggestedOffer] && (
+                                            <span style={{ background: "#f0faf4", color: "#1e7e45", fontSize: 11, fontWeight: 600, padding: "2px 9px", borderRadius: 20, border: "1px solid #b6e8c8" }}>{offerLabels[d.suggestedOffer]}</span>
+                                          )}
+                                        </div>
+                                        <p style={{ margin: "0 0 4px", fontSize: 11, fontWeight: 600, color: "#8e44ad", textTransform: "uppercase", letterSpacing: 0.5 }}>Claude's suggested reply</p>
+                                        <div style={{ background: "#fff", border: "1px solid #e8e8e8", borderRadius: 8, padding: "10px 14px", fontSize: 13, color: "#333", lineHeight: 1.6, fontStyle: "italic" }}>"{d.reply}"</div>
+                                        {d.nextStep && <p style={{ margin: "8px 0 0", fontSize: 12, color: "#666" }}>🧭 {d.nextStep}</p>}
+                                        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 10 }}>
+                                          <button onClick={() => sendReplySMS(m)} disabled={replySending[m.id]} style={{ background: replySending[m.id] ? "#ccc" : "linear-gradient(135deg,#27ae60,#1e7e45)", color: "#fff", border: "none", borderRadius: 8, padding: "7px 14px", fontSize: 12, fontWeight: 600, cursor: replySending[m.id] ? "not-allowed" : "pointer" }}>{replySending[m.id] ? "⏳ Sending..." : "📱 Send Reply"}</button>
+                                          <button onClick={() => copyReply(m)} aria-label="Copy drafted reply" style={{ background: "#fff", color: "#8e44ad", border: "1px solid #d7b9f5", borderRadius: 8, padding: "7px 14px", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>📋 Copy</button>
+                                          <button onClick={() => draftReply(m, ai)} aria-label="Redraft reply" style={{ background: "#fff", color: "#555", border: "1px solid #ddd", borderRadius: 8, padding: "7px 14px", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>↻ Redraft</button>
+                                        </div>
+                                      </div>
+                                    );
+                                  })()}
+                                </div>
                               </div>
                             ) : (
                               <div>
