@@ -84,15 +84,16 @@ async function sendRealSMS(toPhone, message) {
 }
 
 // ─── Claude reply drafting (conversational retention) ────────────────────────
-// Reuses the secure Lambda. Requires a "draft_reply" action on the Lambda
-// (see docs/REPLY_FEATURE_BACKEND.md). No API key ever touches the browser.
+// Reuses the existing secure Lambda "analyze" pass-through — no backend change
+// needed. The offset memberId keeps reply drafts from overwriting a member's
+// saved churn analysis. No API key ever touches the browser.
 async function runClaudeReply(member, originalMessage, memberReply) {
   const response = await fetch(LAMBDA_URL, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      action: "draft_reply",
-      memberId: member.id,
+      action: "analyze",
+      memberId: 900000 + member.id,
       model: "claude-haiku-4-5-20251001",
       max_tokens: 500,
       messages: [{
