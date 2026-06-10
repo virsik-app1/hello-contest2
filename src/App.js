@@ -1,10 +1,28 @@
 import { Amplify } from "aws-amplify";
-import { Authenticator } from "@aws-amplify/ui-react";
+import { fetchAuthSession } from "aws-amplify/auth";
+import { Authenticator, useAuthenticator } from "@aws-amplify/ui-react";
 import "@aws-amplify/ui-react/styles.css";
 import { awsConfig } from "./aws-config";
+import { buildStats, deriveRisk } from "./retention";
 import { useState, useMemo, useEffect } from "react";
 
 Amplify.configure(awsConfig);
+
+// ─── Authenticated API call ───────────────────────────────────────────────────
+// Every request to the Lambda carries the signed-in user's Cognito token, so the
+// backend can reject anyone who isn't logged in. Keys never touch the browser.
+async function apiFetch(payload) {
+  let auth = {};
+  try {
+    const token = (await fetchAuthSession()).tokens?.accessToken?.toString();
+    if (token) auth = { Authorization: `Bearer ${token}` };
+  } catch { /* not signed in yet — request will be rejected by the server */ }
+  return fetch(LAMBDA_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...auth },
+    body: JSON.stringify(payload),
+  });
+}
 
 // ─── Member data ────────────────────────────────────────────────────────────
 const initialMembers = [
@@ -32,10 +50,7 @@ const LAMBDA_URL = "https://duu25rkvvopryctqwaxzleqxg40nbcqf.lambda-url.us-east-
 
 // ─── Claude analysis ──────────────────────────────────────────────────────────
 async function runClaudeAnalysis(member) {
-  const response = await fetch(LAMBDA_URL, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
+  const response = await apiFetch({
       action: "analyze",
       memberId: member.id,
       model: "claude-haiku-4-5-20251001",
@@ -58,9 +73,11 @@ Missed payments: ${member.missedPayments}
 Classes booked ahead: ${member.classesBooked}
 Current risk score: ${member.score}/100`
       }]
-    })
   });
+  if (!response.ok) throw new Error(`Server returned ${response.status}`);
   const data = await response.json();
+  if (data.error) throw new Error(data.error);
+  if (!Array.isArray(data.content)) throw new Error("Unexpected AI response");
   const raw = data.content.filter(b => b.type === "text").map(b => b.text).join("").trim();
   const match = raw.match(/\{[\s\S]*\}/);
   if (!match) throw new Error("No JSON in response");
@@ -69,15 +86,12 @@ Current risk score: ${member.score}/100`
 
 // ─── Send real SMS via Lambda → Twilio ───────────────────────────────────────
 async function sendRealSMS(toPhone, message) {
-  const response = await fetch(LAMBDA_URL, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
+  const response = await apiFetch({
       action: "send_sms",
       to: toPhone,
       message,
-    }),
   });
+  if (!response.ok) throw new Error(`Server returned ${response.status}`);
   const data = await response.json();
   if (!data.success) throw new Error(data.error || "SMS failed");
   return data;
@@ -88,10 +102,7 @@ async function sendRealSMS(toPhone, message) {
 // needed. The offset memberId keeps reply drafts from overwriting a member's
 // saved churn analysis. No API key ever touches the browser.
 async function runClaudeReply(member, originalMessage, memberReply) {
-  const response = await fetch(LAMBDA_URL, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
+  const response = await apiFetch({
       action: "analyze",
       memberId: 900000 + member.id,
       model: "claude-haiku-4-5-20251001",
@@ -106,9 +117,11 @@ Write the studio's next text back. Be warm, human, and specific to what they sai
 
 Member: ${member.name}, on ${member.plan} ($${member.value}/mo), ${member.joinedMonths} months as a member.`
       }]
-    })
   });
+  if (!response.ok) throw new Error(`Server returned ${response.status}`);
   const data = await response.json();
+  if (data.error) throw new Error(data.error);
+  if (!Array.isArray(data.content)) throw new Error("Unexpected AI response");
   const raw = data.content.filter(b => b.type === "text").map(b => b.text).join("").trim();
   const match = raw.match(/\{[\s\S]*\}/);
   if (!match) throw new Error("No JSON in response");
@@ -124,23 +137,6 @@ const offerLabels = {
   pause_membership:        "⏸ Offer to Pause",
   none:                    null,
 };
-
-// ─── Stat cards (now dynamic) ─────────────────────────────────────────────────
-function buildStats(members, outreachLog) {
-  const highRisk   = members.filter(m => m.risk === "high").length;
-  const recovered  = outreachLog.filter(o => o.status === "recovered").length;
-  const sent       = outreachLog.length;
-  const responded  = outreachLog.filter(o => o.status !== "sent").length;
-  const rate       = sent > 0 ? Math.round((responded / sent) * 100) : 0;
-  const revSaved   = outreachLog.filter(o => o.status === "recovered").reduce((a, o) => a + o.value * 12, 0);
-  return [
-    { label: "Members Recovered", value: String(recovered),         sub: "this month",   accent: false },
-    { label: "Revenue Saved",      value: `$${revSaved.toLocaleString()}`, sub: "projected annual", accent: false },
-    { label: "Messages Sent",      value: String(sent),             sub: "this month",   accent: false },
-    { label: "Avg Response Rate",  value: `${rate}%`,               sub: "last 30 days", accent: false },
-    { label: "At-Risk Members",    value: String(highRisk),         sub: "right now",    accent: true  },
-  ];
-}
 
 // ─── Nav tabs ─────────────────────────────────────────────────────────────────
 const TABS = ["Dashboard", "Outreach", "Analytics"];
@@ -165,17 +161,19 @@ export default function App() {
   const [replyDrafts, setReplyDrafts]   = useState({});   // Claude's drafted response, keyed by member id
   const [replyLoading, setReplyLoading] = useState({});
   const [replySending, setReplySending] = useState({});
+  const { authStatus } = useAuthenticator((c) => [c.authStatus]);
 
-  // ── Load persisted data from DynamoDB on mount ────────────────────────────
+  // ── Load persisted data from DynamoDB once the user is signed in ──────────
+  // (load_data now requires a Cognito token, so we wait for authentication
+  //  instead of firing on mount — which also avoids a wasted pre-login call.)
   useEffect(() => {
+    if (authStatus !== "authenticated") return;
+    let cancelled = false;
     async function loadData() {
       try {
-        const res  = await fetch(LAMBDA_URL, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ action: "load_data" }),
-        });
+        const res  = await apiFetch({ action: "load_data" });
         const data = await res.json();
+        if (cancelled) return;
 
         // Restore AI results
         if (data.memberResults && data.memberResults.length > 0) {
@@ -198,21 +196,24 @@ export default function App() {
             sentAt:     l.sentAt,
             status:     l.status,
             followUpDays: l.followUpDays,
+            smsSent:    l.smsSent === true || l.smsSent === "true",
           }));
           setOutreachLog(logs);
 
-          // Restore smsSent set
-          const sentIds = new Set(logs.filter(l => l.status !== "sent" || l.smsSent).map(l => l.memberId));
+          // Restore smsSent set — only members who actually received a text,
+          // so the "Send SMS Now" button doesn't wrongly reappear after reload.
+          const sentIds = new Set(logs.filter(l => l.smsSent).map(l => l.memberId));
           setSmsSent(sentIds);
         }
       } catch (err) {
         console.error("Failed to load saved data:", err);
       } finally {
-        setDataLoading(false);
+        if (!cancelled) setDataLoading(false);
       }
     }
     loadData();
-  }, []);
+    return () => { cancelled = true; };
+  }, [authStatus]);
 
   // ── Close the member modal with the Escape key (accessibility) ────────────
   useEffect(() => {
@@ -255,7 +256,7 @@ export default function App() {
     );
   }
 
-  async function markOutreach(member, ai) {
+  async function markOutreach(member, ai, smsWasSent = false) {
     const already = outreachLog.find(o => o.memberId === member.id && o.status === "sent");
     if (already) { showToast("Message already logged for " + member.name.split(" ")[0]); return; }
     const log = {
@@ -268,15 +269,12 @@ export default function App() {
       sentAt: new Date().toLocaleString(),
       status: "sent",
       followUpDays: ai.followUpDays || 3,
+      smsSent: smsWasSent,
     };
     setOutreachLog(prev => [...prev, log]);
     // Save to DynamoDB
     try {
-      await fetch(LAMBDA_URL, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "save_outreach", log }),
-      });
+      await apiFetch({ action: "save_outreach", log });
     } catch (err) {
       console.error("Failed to save outreach log:", err);
     }
@@ -287,11 +285,7 @@ export default function App() {
     setOutreachLog(prev => prev.map(o => o.id === logId ? { ...o, status } : o));
     // Persist status update to DynamoDB
     try {
-      await fetch(LAMBDA_URL, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "update_outreach_status", logId, status }),
-      });
+      await apiFetch({ action: "update_outreach_status", logId, status });
     } catch (err) {
       console.error("Failed to update outreach status:", err);
     }
@@ -312,7 +306,7 @@ export default function App() {
     try {
       await sendRealSMS(member.phone, ai.message);
       setSmsSent(prev => new Set([...prev, member.id]));
-      markOutreach(member, ai);
+      markOutreach(member, ai, true);
       showToast(`📱 SMS sent to ${member.name.split(" ")[0]}!`);
     } catch (err) {
       showToast(`❌ SMS failed: ${err.message}`);
@@ -563,9 +557,10 @@ export default function App() {
                     </div>
                   )}
                   {filteredMembers.map(m => {
-                    const rc        = riskConfig[m.risk];
-                    const isSelected = selected === m.id;
                     const ai        = aiResults[m.id];
+                    const effRisk   = deriveRisk(m, ai);
+                    const rc        = riskConfig[effRisk];
+                    const isSelected = selected === m.id;
                     const isLoading  = loading[m.id];
                     const logged    = outreachLog.find(o => o.memberId === m.id);
                     const scheduled = scheduledIds.has(m.id);
@@ -589,7 +584,7 @@ export default function App() {
                             </div>
                           </div>
                           <span style={{ fontSize: 13, color: "#555", display: "flex", alignItems: "center" }}>{m.plan}</span>
-                          <span style={{ fontSize: 13, color: m.risk === "high" ? "#c0392b" : "#555", fontWeight: m.risk === "high" ? 600 : 400, display: "flex", alignItems: "center" }}>{m.lastVisit}</span>
+                          <span style={{ fontSize: 13, color: effRisk === "high" ? "#c0392b" : "#555", fontWeight: effRisk === "high" ? 600 : 400, display: "flex", alignItems: "center" }}>{m.lastVisit}</span>
                           <span style={{ fontSize: 12, color: "#888", display: "flex", alignItems: "center" }}>{m.usualVisits}</span>
                           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                             <div style={{ flex: 1, height: 6, background: "#f0f0f0", borderRadius: 3, overflow: "hidden" }}>
@@ -915,8 +910,8 @@ export default function App() {
           {/* ── Member Detail Modal ── */}
           {modalMember && (() => {
             const m  = modalMember;
-            const rc = riskConfig[m.risk];
             const ai = aiResults[m.id];
+            const rc = riskConfig[deriveRisk(m, ai)];
             return (
               <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 200 }} onClick={() => setModalMember(null)}>
                 <div role="dialog" aria-modal="true" aria-label={`Member details for ${m.name}`} style={{ background: "#fff", borderRadius: 16, padding: "28px 32px", maxWidth: 480, width: "90%", boxShadow: "0 20px 60px rgba(0,0,0,0.2)" }} onClick={e => e.stopPropagation()}>
