@@ -31,7 +31,7 @@ const PUBLIC_ACTIONS = new Set(["submit_lead"]);
 
 // Only these models may be requested through the proxy (defends the Anthropic
 // key against being driven as a general-purpose, large-model proxy).
-const ALLOWED_MODELS = new Set(["claude-haiku-4-5-20251001"]);
+const ALLOWED_MODELS = new Set(["claude-haiku-4-5-20251001", "claude-haiku-4-5"]);
 const DEFAULT_MODEL  = "claude-haiku-4-5-20251001";
 const MAX_TOKENS_CAP = 1024;
 
@@ -266,12 +266,16 @@ async function saveLead(lead) {
 
 // ─── Main handler ─────────────────────────────────────────────────────────────
 exports.handler = async (event) => {
+  // Read the HTTP method from either Function URL payload format:
+  //   v2.0 → event.requestContext.http.method   ·   v1.0 → event.httpMethod
+  const method = event.requestContext?.http?.method || event.httpMethod;
+
   // CORS preflight (no auth — the browser sends this before attaching headers)
-  if (event.httpMethod === "OPTIONS") {
+  if (method === "OPTIONS") {
     return { statusCode: 200, headers: CORS, body: "" };
   }
 
-  if (event.httpMethod !== "POST") {
+  if (method !== "POST") {
     return { statusCode: 405, headers: CORS, body: JSON.stringify({ error: "Method not allowed" }) };
   }
 
