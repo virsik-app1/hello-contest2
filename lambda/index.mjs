@@ -1,15 +1,16 @@
 // PulseRetain Lambda — ROLLBACK to the original working version (no auth gate).
 // This is the exact code that was running when AI analysis last worked, with
-// only two minimal patches so it works with the Function URL's CORS setting
-// turned OFF (it now answers preflights itself):
-//   1. HTTP method is read from both Function URL payload formats
+// three minimal patches:
+//   1. ES-module syntax (import/export) because the live handler file is
+//      index.mjs — classic require/exports crashes on startup there (the 502s).
+//   2. HTTP method is read from both Function URL payload formats
 //      (event.requestContext.http.method OR event.httpMethod).
-//   2. "Authorization" added to allowed CORS headers, so the current frontend
+//   3. "Authorization" added to allowed CORS headers, so the current frontend
 //      (which attaches a login token) passes preflight. The token is ignored.
-const https = require("https");
-const { DynamoDBClient } = require("@aws-sdk/client-dynamodb");
-const { DynamoDBDocumentClient, PutCommand, GetCommand, ScanCommand } = require("@aws-sdk/lib-dynamodb");
-const { SESClient, SendEmailCommand } = require("@aws-sdk/client-ses");
+import https from "https";
+import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
+import { DynamoDBDocumentClient, PutCommand, GetCommand, ScanCommand } from "@aws-sdk/lib-dynamodb";
+import { SESClient, SendEmailCommand } from "@aws-sdk/client-ses";
 
 // ─── DynamoDB setup ───────────────────────────────────────────────────────────
 const dynamo = DynamoDBDocumentClient.from(new DynamoDBClient({ region: "us-east-1" }));
@@ -185,7 +186,7 @@ async function saveLead(lead) {
 }
 
 // ─── Main handler ─────────────────────────────────────────────────────────────
-exports.handler = async (event) => {
+export const handler = async (event) => {
   // Read the HTTP method from either Function URL payload format:
   //   v2.0 → event.requestContext.http.method   ·   v1.0 → event.httpMethod
   const method = event.requestContext?.http?.method || event.httpMethod;
