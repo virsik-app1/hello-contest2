@@ -59,7 +59,7 @@ async function runClaudeAnalysis(member) {
         role: "user",
         content: `You are a fitness studio retention AI. Respond with ONLY a raw JSON object — no markdown, no backticks.
 
-{"riskLevel":"high","score":85,"reason":"Brief 1-sentence churn reason","message":"Personalized SMS under 160 chars","followUpDays":3,"offerType":"class_credit"}
+{"riskLevel":"high","score":85,"reason":"One sentence naming the SPECIFIC behavioral change, not a generic label — e.g. 'Has skipped her usual Tue & Thu classes two weeks running and stopped booking ahead.'","message":"Personalized SMS under 160 chars that references their specific situation","followUpDays":3,"offerType":"class_credit"}
 
 offerType must be one of: class_credit, discount_percent, free_guest_pass, personal_trainer_intro, none
 
@@ -351,8 +351,13 @@ export default function App() {
 
   // ── AI calls ───────────────────────────────────────────────────────────────
   const analyzeAll = async () => {
+    // Default view → the high-risk members. With a filter or search active →
+    // exactly the members on screen (fixes: filtering to Medium and clicking
+    // "Run AI Analysis" used to do nothing).
+    const defaultView = filterRisk === "all" && search.trim() === "";
+    const targets = filteredMembers.filter(m => (defaultView ? m.risk === "high" : true));
+    if (targets.length === 0) { showToast("No members in this view to analyze"); return; }
     setAnalyzing(true);
-    const targets = members.filter(m => m.risk === "high");
     for (const m of targets) {
       setLoading(prev => ({ ...prev, [m.id]: true }));
       try {
@@ -682,7 +687,7 @@ export default function App() {
                                     <span style={{ fontSize: 12, color: "#27ae60", display: "flex", alignItems: "center", gap: 4 }}>✓ Outreach logged {logged.sentAt}</span>
                                   )}
                                 </div>
-                                <p style={{ margin: "10px 0 0", fontSize: 11, color: "#bbb" }}>SMS sent live via Twilio · Claude AI analysis</p>
+                                <p style={{ margin: "10px 0 0", fontSize: 11, color: "#bbb" }}>Claude AI analysis · SMS delivery via Twilio</p>
 
                                 {/* ── Conversational retention: handle the member's reply ── */}
                                 <div style={{ marginTop: 16, paddingTop: 16, borderTop: "1px dashed #e0e0e0" }}>
@@ -792,6 +797,11 @@ export default function App() {
                           <span style={{ fontSize: 12, color: "#555", fontStyle: "italic", lineHeight: 1.5 }}>"{log.message.slice(0, 80)}{log.message.length > 80 ? "…" : ""}"</span>
                           <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
                             <span style={{ background: sc.bg, color: sc.color, fontSize: 11, fontWeight: 600, padding: "3px 10px", borderRadius: 20, display: "inline-block", textAlign: "center" }}>{sc.label}</span>
+                            {log.status === "recovered" && (
+                              <span style={{ fontSize: 10, color: "#1e7e45", textAlign: "center" }}>
+                                ≈ ${(Number(log.value || 0) * 12).toLocaleString()}/yr retained · &lt;$0.01 AI cost
+                              </span>
+                            )}
                             {log.status === "sent" && (
                               <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
                                 <button onClick={() => markStatus(log.id, "responded")} style={{ fontSize: 10, padding: "2px 7px", borderRadius: 5, border: "1px solid #b3d9f5", background: "#e8f4fd", color: "#185fa5", cursor: "pointer" }}>Responded</button>
@@ -904,7 +914,7 @@ export default function App() {
               </>
             )}
 
-            <p style={{ textAlign: "center", marginTop: 24, fontSize: 12, color: "#ccc" }}>PulseRetain · Powered by Claude AI · Data synced from Mindbody</p>
+            <p style={{ textAlign: "center", marginTop: 24, fontSize: 12, color: "#ccc" }}>PulseRetain · Powered by Claude AI · Demo roster (synthetic) — Mindbody/Glofox sync on roadmap</p>
           </div>
 
           {/* ── Member Detail Modal ── */}
@@ -921,7 +931,7 @@ export default function App() {
                       <p style={{ margin: 0, fontSize: 18, fontWeight: 700, color: "#1a1a2e" }}>{m.name}</p>
                       <p style={{ margin: "2px 0 0", fontSize: 13, color: "#888" }}>{m.plan} · ${m.value}/mo</p>
                     </div>
-                    <button onClick={() => setModalMember(null)} aria-label="Close member details" style={{ marginLeft: "auto", background: "none", border: "none", fontSize: 20, cursor: "pointer", color: "#aaa" }}>×</button>
+                    <button autoFocus onClick={() => setModalMember(null)} aria-label="Close member details" style={{ marginLeft: "auto", background: "none", border: "none", fontSize: 20, cursor: "pointer", color: "#aaa" }}>×</button>
                   </div>
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 16 }}>
                     {[
