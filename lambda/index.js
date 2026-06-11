@@ -1,5 +1,12 @@
+// PulseRetain Lambda — ROLLBACK to the original working version (no auth gate).
+// This is the exact code that was running when AI analysis last worked, with
+// only two minimal patches so it works with the Function URL's CORS setting
+// turned OFF (it now answers preflights itself):
+//   1. HTTP method is read from both Function URL payload formats
+//      (event.requestContext.http.method OR event.httpMethod).
+//   2. "Authorization" added to allowed CORS headers, so the current frontend
+//      (which attaches a login token) passes preflight. The token is ignored.
 const https = require("https");
-const crypto = require("crypto");
 const { DynamoDBClient } = require("@aws-sdk/client-dynamodb");
 const { DynamoDBDocumentClient, PutCommand, GetCommand, ScanCommand } = require("@aws-sdk/lib-dynamodb");
 const { SESClient, SendEmailCommand } = require("@aws-sdk/client-ses");
@@ -15,89 +22,12 @@ const ses = new SESClient({ region: "us-east-1" });
 // IMPORTANT: this must be YOUR verified email address from SES
 const NOTIFY_EMAIL = process.env.NOTIFY_EMAIL;
 
-// ─── Auth: Cognito JWT verification ───────────────────────────────────────────
-// These are PUBLIC identifiers (they already ship in the browser bundle), not
-// secrets. Every app action must carry a valid Cognito access/ID token, so a
-// stranger with the Function URL can no longer call analyze/send_sms/etc.
-const REGION        = "us-east-1";
-const USER_POOL_ID  = "us-east-1_aQyubZnZS";
-const APP_CLIENT_ID = "3sfqd04nehcblnver7gs5mafnf";
-const ISSUER        = `https://cognito-idp.${REGION}.amazonaws.com/${USER_POOL_ID}`;
-const JWKS_URL      = `${ISSUER}/.well-known/jwks.json`;
-
-// Actions reachable WITHOUT a login. The public marketing site posts leads with
-// no session, so submit_lead stays open; everything else requires auth.
-const PUBLIC_ACTIONS = new Set(["submit_lead"]);
-
-// Only these models may be requested through the proxy (defends the Anthropic
-// key against being driven as a general-purpose, large-model proxy).
-const ALLOWED_MODELS = new Set(["claude-haiku-4-5-20251001", "claude-haiku-4-5"]);
-const DEFAULT_MODEL  = "claude-haiku-4-5-20251001";
-const MAX_TOKENS_CAP = 1024;
-
-// Optional SMS recipient allowlist (comma-separated phone numbers in any format).
-// When set, send_sms may only text these numbers — a hard stop on toll fraud.
-// Leave unset to preserve current behavior. Recommended: set it to the phone
-// number(s) you actually demo with.
-const SMS_ALLOWLIST = (process.env.SMS_ALLOWLIST || "")
-  .split(",")
-  .map(s => s.replace(/\D/g, "").slice(-10))
-  .filter(Boolean);
-
-let jwksCache = null;
-async function getJwks(force = false) {
-  if (jwksCache && !force) return jwksCache;
-  const res = await httpsGet(JWKS_URL);
-  jwksCache = JSON.parse(res.body).keys;
-  return jwksCache;
-}
-
-function b64urlToBuf(s) { return Buffer.from(s.replace(/-/g, "+").replace(/_/g, "/"), "base64"); }
-function b64urlToJson(s) { return JSON.parse(b64urlToBuf(s).toString("utf8")); }
-
-async function verifyCognitoToken(token) {
-  if (!token) throw new Error("Missing token");
-  const parts = token.split(".");
-  if (parts.length !== 3) throw new Error("Malformed token");
-
-  const header  = b64urlToJson(parts[0]);
-  const payload = b64urlToJson(parts[1]);
-
-  let jwk = (await getJwks()).find(k => k.kid === header.kid);
-  if (!jwk) jwk = (await getJwks(true)).find(k => k.kid === header.kid); // refresh once on rotation
-  if (!jwk) throw new Error("Unknown signing key");
-
-  const pubKey = crypto.createPublicKey({ key: jwk, format: "jwk" });
-  const ok = crypto.verify("RSA-SHA256", Buffer.from(`${parts[0]}.${parts[1]}`), pubKey, b64urlToBuf(parts[2]));
-  if (!ok) throw new Error("Bad signature");
-
-  const now = Math.floor(Date.now() / 1000);
-  if (payload.exp && now > payload.exp) throw new Error("Token expired");
-  if (payload.iss !== ISSUER) throw new Error("Bad issuer");
-  // Access tokens carry client_id; ID tokens carry aud. Accept either from our app.
-  if (payload.client_id !== APP_CLIENT_ID && payload.aud !== APP_CLIENT_ID) throw new Error("Wrong client");
-
-  return payload;
-}
-
 // ─── CORS headers ─────────────────────────────────────────────────────────────
-// Security comes from the JWT check, not CORS (CORS only constrains browsers,
-// never curl/scripts). We keep "*" so an unknown Amplify domain can't break the
-// app, but add Authorization to the allowed headers so the bearer token passes
-// preflight. To origin-lock later, swap "*" for your exact app/landing origins.
 const CORS = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "Content-Type, Authorization",
   "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
-
-// ─── Helper: read a header case-insensitively ─────────────────────────────────
-function getHeader(event, name) {
-  const headers = event.headers || {};
-  const lower = name.toLowerCase();
-  for (const k in headers) if (k.toLowerCase() === lower) return headers[k];
-  return undefined;
-}
 
 // ─── Helper: HTTPS request ────────────────────────────────────────────────────
 function httpsRequest(options, payload) {
@@ -110,16 +40,6 @@ function httpsRequest(options, payload) {
     req.on("error", reject);
     if (payload) req.write(payload);
     req.end();
-  });
-}
-
-function httpsGet(url) {
-  return new Promise((resolve, reject) => {
-    https.get(url, (res) => {
-      let data = "";
-      res.on("data", (chunk) => (data += chunk));
-      res.on("end", () => resolve({ statusCode: res.statusCode, body: data }));
-    }).on("error", reject);
   });
 }
 
@@ -270,7 +190,7 @@ exports.handler = async (event) => {
   //   v2.0 → event.requestContext.http.method   ·   v1.0 → event.httpMethod
   const method = event.requestContext?.http?.method || event.httpMethod;
 
-  // CORS preflight (no auth — the browser sends this before attaching headers)
+  // CORS preflight
   if (method === "OPTIONS") {
     return { statusCode: 200, headers: CORS, body: "" };
   }
@@ -286,20 +206,6 @@ exports.handler = async (event) => {
     return { statusCode: 400, headers: CORS, body: JSON.stringify({ error: "Invalid JSON body" }) };
   }
 
-  // ── Auth gate: every action except the public ones needs a valid login ──────
-  // (analyze also triggers on a bare `messages` field, so anything that isn't an
-  //  explicitly public action must be authenticated.)
-  if (!PUBLIC_ACTIONS.has(body.action)) {
-    try {
-      const authz = getHeader(event, "authorization") || "";
-      const token = authz.replace(/^Bearer\s+/i, "").trim();
-      await verifyCognitoToken(token);
-    } catch (e) {
-      console.warn("Auth rejected:", e.message);
-      return { statusCode: 401, headers: CORS, body: JSON.stringify({ error: "Unauthorized" }) };
-    }
-  }
-
   try {
 
     // ── Route: "analyze" — call Claude, save result to DynamoDB ─────────────
@@ -307,11 +213,11 @@ exports.handler = async (event) => {
       if (!process.env.ANTHROPIC_API_KEY) {
         return { statusCode: 500, headers: CORS, body: JSON.stringify({ error: "ANTHROPIC_API_KEY not set" }) };
       }
-      // Pin the model to an allowed one and cap output size.
-      const model     = ALLOWED_MODELS.has(body.model) ? body.model : DEFAULT_MODEL;
-      const maxTokens = Math.min(Number(body.max_tokens) || 400, MAX_TOKENS_CAP);
-
-      const response = await callClaude(body.messages, model, maxTokens);
+      const response = await callClaude(
+        body.messages,
+        body.model || "claude-haiku-4-5-20251001",
+        body.max_tokens || 400
+      );
       const claudeData = JSON.parse(response.body);
 
       // Parse and save the AI result to DynamoDB
@@ -342,12 +248,6 @@ exports.handler = async (event) => {
         return { statusCode: 400, headers: CORS, body: JSON.stringify({ error: "Invalid phone number" }) };
       }
       const formattedPhone = cleaned.length === 10 ? `+1${cleaned}` : `+${cleaned}`;
-
-      // Hard stop on toll fraud: when an allowlist is configured, only text it.
-      if (SMS_ALLOWLIST.length > 0 && !SMS_ALLOWLIST.includes(cleaned.slice(-10))) {
-        return { statusCode: 403, headers: CORS, body: JSON.stringify({ error: "Recipient not on the SMS allowlist" }) };
-      }
-
       const result = await sendSMS(formattedPhone, message);
       return {
         statusCode: 200,
