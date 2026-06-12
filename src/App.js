@@ -164,6 +164,14 @@ async function logReplySent(member, text) {
   return data && Array.isArray(data.turns) ? data.turns : null;
 }
 
+// Competitive Intelligence — aggregates where/why members say they're leaving
+// (consent-based, from their own replies; never location tracking).
+async function fetchCompetitiveIntel() {
+  const res = await apiFetch({ action: "get_competitive_intel" });
+  if (!res.ok) return null;
+  return res.json().catch(() => null);
+}
+
 // ─── Offer badge labels ───────────────────────────────────────────────────────
 const offerLabels = {
   class_credit:            "🎟 Free Class Credit",
@@ -175,7 +183,17 @@ const offerLabels = {
 };
 
 // ─── Nav tabs ─────────────────────────────────────────────────────────────────
-const TABS = ["Dashboard", "Outreach", "Analytics"];
+const TABS = ["Dashboard", "Outreach", "Analytics", "Competitors"];
+
+// Labels for the competitive-intel "why they leave" breakdown
+const reasonMeta = {
+  competitor: { label: "Joined a competitor", color: "#c0392b", bg: "#fff1f1" },
+  cost:       { label: "Cost / price",        color: "#b7770d", bg: "#fffbf0" },
+  time:       { label: "Time / too busy",     color: "#8e44ad", bg: "#f5f0ff" },
+  injury:     { label: "Injury / health",     color: "#185fa5", bg: "#e8f4fd" },
+  moving:     { label: "Moving away",         color: "#1e7e45", bg: "#f0faf4" },
+  other:      { label: "Other",               color: "#777",    bg: "#f4f4f4" },
+};
 
 export default function App() {
   const [members]                     = useState(initialMembers);
@@ -190,6 +208,8 @@ export default function App() {
   const [scheduledIds, setScheduledIds] = useState(new Set());
   const [smsSending, setSmsSending]   = useState({});
   const [smsSent, setSmsSent]         = useState(new Set());
+  const [intel, setIntel]             = useState(null);   // competitive-intel aggregate
+  const [intelLoading, setIntelLoading] = useState(false);
   const [toast, setToast]             = useState(null);
   const [dataLoading, setDataLoading] = useState(true);
   const [search, setSearch]           = useState("");
@@ -269,6 +289,17 @@ export default function App() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [modalMember]);
+
+  // ── Load competitive intelligence whenever the Competitors tab opens ───────
+  useEffect(() => {
+    if (activeTab !== "Competitors") return;
+    let cancelled = false;
+    setIntelLoading(true);
+    fetchCompetitiveIntel().then(data => {
+      if (!cancelled) { setIntel(data); setIntelLoading(false); }
+    });
+    return () => { cancelled = true; };
+  }, [activeTab, outreachLog]);
 
   // ── Helpers ────────────────────────────────────────────────────────────────
   function showToast(msg) {
@@ -1007,6 +1038,101 @@ export default function App() {
                 </div>
               </>
             )}
+
+            {/* ════════════════════════════════════════════════════════════
+                TAB: COMPETITORS (Competitive Intelligence)
+            ════════════════════════════════════════════════════════════ */}
+            {activeTab === "Competitors" && (() => {
+              const reasons = intel?.reasons || {};
+              const competitors = intel?.competitors || [];
+              const lostCount = reasons.competitor || 0;
+              const lostRev = intel?.lostToCompetitorsRevenue || 0;
+              const reasonsTotal = Object.values(reasons).reduce((a, b) => a + b, 0);
+              const maxMembers = Math.max(1, ...competitors.map(c => c.members));
+              return (
+                <>
+                  <div style={{ marginBottom: 24 }}>
+                    <h1 style={{ margin: 0, fontSize: 26, fontWeight: 700, color: "#1a1a2e" }}>Competitive Intelligence</h1>
+                    <p style={{ margin: "4px 0 0", color: "#888", fontSize: 14 }}>Where members go when they leave — learned from what they <em>tell</em> the AI in their own replies. No location tracking, ever.</p>
+                  </div>
+
+                  {intelLoading ? (
+                    <div style={{ background: "#fff", borderRadius: 14, boxShadow: "0 1px 4px rgba(0,0,0,0.07)", padding: "48px 24px", textAlign: "center", color: "#888", fontSize: 14 }}>⏳ Gathering competitive signal…</div>
+                  ) : !intel || intel.total === 0 ? (
+                    <div style={{ background: "#fff", borderRadius: 14, boxShadow: "0 1px 4px rgba(0,0,0,0.07)", padding: "48px 24px", textAlign: "center" }}>
+                      <p style={{ fontSize: 32, margin: "0 0 8px" }}>📡</p>
+                      <p style={{ fontSize: 16, fontWeight: 600, color: "#1a1a2e", margin: "0 0 6px" }}>No competitor signal yet</p>
+                      <p style={{ fontSize: 13, color: "#888", margin: "0 auto", maxWidth: 460, lineHeight: 1.6 }}>When an at-risk member replies and mentions where they're headed, the AI captures it here — so you see which gyms are pulling your members, learned from honest conversation rather than surveillance.</p>
+                    </div>
+                  ) : (
+                    <>
+                      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 16, marginBottom: 24 }}>
+                        {[
+                          { label: "Members Lost to Competitors", value: String(lostCount), sub: "named another gym", accent: true },
+                          { label: "Revenue at Risk to Competitors", value: `$${lostRev}/mo`, sub: `≈ $${(lostRev * 12).toLocaleString()}/yr`, accent: lostRev > 0 },
+                          { label: "Members Who Shared Why", value: String(intel.total), sub: "via AI conversation", accent: false },
+                        ].map((c, i) => (
+                          <div key={i} style={{ background: "#fff", borderRadius: 12, padding: "20px 22px", boxShadow: "0 1px 4px rgba(0,0,0,0.07)", borderTop: c.accent ? "3px solid #e74c3c" : "3px solid #1a1a2e" }}>
+                            <p style={{ margin: 0, fontSize: 26, fontWeight: 700, color: c.accent ? "#e74c3c" : "#1a1a2e" }}>{c.value}</p>
+                            <p style={{ margin: "3px 0 0", fontSize: 12, color: "#555" }}>{c.label}</p>
+                            <p style={{ margin: "1px 0 0", fontSize: 11, color: "#aaa" }}>{c.sub}</p>
+                          </div>
+                        ))}
+                      </div>
+
+                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20 }}>
+                        {/* Where members are going */}
+                        <div style={{ background: "#fff", borderRadius: 14, boxShadow: "0 1px 4px rgba(0,0,0,0.07)", padding: "20px 24px" }}>
+                          <h2 style={{ margin: "0 0 4px", fontSize: 15, fontWeight: 700, color: "#1a1a2e" }}>🎯 Where members are going</h2>
+                          <p style={{ margin: "0 0 16px", fontSize: 12, color: "#aaa" }}>Gyms members named when they left</p>
+                          {competitors.length === 0 ? (
+                            <p style={{ fontSize: 13, color: "#aaa" }}>No specific competitor named yet — members cited reasons but not a destination.</p>
+                          ) : competitors.map(c => (
+                            <div key={c.name} style={{ marginBottom: 14 }}>
+                              <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
+                                <span style={{ fontSize: 13, fontWeight: 600, color: "#1a1a2e" }}>{c.name}</span>
+                                <span style={{ fontSize: 12, color: "#c0392b", fontWeight: 600 }}>{c.members} member{c.members !== 1 ? "s" : ""} · ${c.monthlyValue}/mo</span>
+                              </div>
+                              <div style={{ height: 8, background: "#f0f0f0", borderRadius: 4, overflow: "hidden" }}>
+                                <div style={{ width: `${Math.round((c.members / maxMembers) * 100)}%`, height: "100%", background: "linear-gradient(90deg,#e74c3c,#c0392b)", borderRadius: 4, transition: "width 0.5s" }} />
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+
+                        {/* Why members leave */}
+                        <div style={{ background: "#fff", borderRadius: 14, boxShadow: "0 1px 4px rgba(0,0,0,0.07)", padding: "20px 24px" }}>
+                          <h2 style={{ margin: "0 0 4px", fontSize: 15, fontWeight: 700, color: "#1a1a2e" }}>💬 Why members leave</h2>
+                          <p style={{ margin: "0 0 16px", fontSize: 12, color: "#aaa" }}>Reasons captured from their replies</p>
+                          {Object.entries(reasons)
+                            .filter(([, n]) => n > 0)
+                            .sort((a, b) => b[1] - a[1])
+                            .map(([key, n]) => {
+                              const rm = reasonMeta[key] || { label: key, color: "#777" };
+                              const pct = Math.round((n / reasonsTotal) * 100);
+                              return (
+                                <div key={key} style={{ marginBottom: 14 }}>
+                                  <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
+                                    <span style={{ fontSize: 13, color: "#555" }}>{rm.label}</span>
+                                    <span style={{ fontSize: 13, fontWeight: 600, color: rm.color }}>{n} ({pct}%)</span>
+                                  </div>
+                                  <div style={{ height: 8, background: "#f0f0f0", borderRadius: 4, overflow: "hidden" }}>
+                                    <div style={{ width: `${pct}%`, height: "100%", background: rm.color, borderRadius: 4, transition: "width 0.5s" }} />
+                                  </div>
+                                </div>
+                              );
+                            })}
+                        </div>
+                      </div>
+
+                      <p style={{ textAlign: "center", marginTop: 18, fontSize: 12, color: "#aaa", fontStyle: "italic" }}>
+                        🔒 Privacy by design: this is built entirely from what members choose to share in conversation — never from tracking their location.
+                      </p>
+                    </>
+                  )}
+                </>
+              );
+            })()}
 
             <p style={{ textAlign: "center", marginTop: 24, fontSize: 12, color: "#ccc" }}>PulseRetain · Powered by Claude AI · Demo roster (synthetic) — Mindbody/Glofox sync on roadmap</p>
           </div>
