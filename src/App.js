@@ -29,6 +29,41 @@ function useIsMobile(breakpoint = 640) {
   return isMobile;
 }
 
+// ─── "Add to Home Screen" install prompt ──────────────────────────────────────
+// Android/desktop Chrome: capture the native beforeinstallprompt and trigger it
+// on tap. iOS Safari has no such API, so we show the manual Share → Add steps.
+function useInstallPrompt() {
+  const [deferred, setDeferred]   = useState(null);
+  const [installed, setInstalled] = useState(false);
+  useEffect(() => {
+    const onBIP = (e) => { e.preventDefault(); setDeferred(e); };
+    const onInstalled = () => { setInstalled(true); setDeferred(null); };
+    window.addEventListener("beforeinstallprompt", onBIP);
+    window.addEventListener("appinstalled", onInstalled);
+    return () => {
+      window.removeEventListener("beforeinstallprompt", onBIP);
+      window.removeEventListener("appinstalled", onInstalled);
+    };
+  }, []);
+
+  const ua = typeof navigator !== "undefined" ? navigator.userAgent || "" : "";
+  const isIOS = /iPad|iPhone|iPod/.test(ua);
+  const isIOSSafari = isIOS && /safari/i.test(ua) && !/crios|fxios|edgios/i.test(ua);
+  const isStandalone =
+    installed ||
+    (typeof window !== "undefined" && window.matchMedia && window.matchMedia("(display-mode: standalone)").matches) ||
+    (typeof navigator !== "undefined" && navigator.standalone === true);
+
+  const promptInstall = async () => {
+    if (!deferred) return;
+    deferred.prompt();
+    try { await deferred.userChoice; } catch { /* user dismissed */ }
+    setDeferred(null);
+  };
+
+  return { canInstall: !!deferred, isIOSSafari, isStandalone, promptInstall };
+}
+
 // ─── Authenticated API call ───────────────────────────────────────────────────
 // Every request to the Lambda carries the signed-in user's Cognito token, so the
 // backend can reject anyone who isn't logged in. Keys never touch the browser.
@@ -226,6 +261,15 @@ const reasonMeta = {
 
 export default function App() {
   const isMobile = useIsMobile();
+  const install = useInstallPrompt();
+  const [installDismissed, setInstallDismissed] = useState(() => {
+    try { return localStorage.getItem("pulseretain-install-dismissed") === "1"; } catch { return false; }
+  });
+  const showInstall = !install.isStandalone && !installDismissed && (install.canInstall || install.isIOSSafari);
+  function dismissInstall() {
+    setInstallDismissed(true);
+    try { localStorage.setItem("pulseretain-install-dismissed", "1"); } catch { /* private mode */ }
+  }
   const [members, setMembers]         = useState(initialMembers);
   const [usingImported, setUsingImported] = useState(false);
   const importInputRef                = useRef(null);
@@ -655,6 +699,7 @@ export default function App() {
 
   // ══════════════════════════════════════════════════════════════════════════
   return (
+    <>
     <Authenticator>
       {({ signOut, user }) => (
         <div style={{ minHeight: "100vh", background: "#f5f6fa", fontFamily: "'Georgia', serif" }}>
@@ -1592,5 +1637,30 @@ export default function App() {
         </div>
       )}
     </Authenticator>
+
+    {/* ── "Add to Home Screen" prompt (overlays login + app) ── */}
+    {showInstall && (
+      <div role="dialog" aria-label="Install PulseRetain" style={{ position: "fixed", left: 0, right: 0, bottom: 0, zIndex: 9998, background: "#1a1a2e", color: "#fff", padding: "12px 16px", paddingBottom: "calc(12px + env(safe-area-inset-bottom))", display: "flex", alignItems: "center", gap: 12, boxShadow: "0 -4px 24px rgba(0,0,0,0.32)" }}>
+        <img src={`${process.env.PUBLIC_URL || ""}/apple-touch-icon.png`} alt="" width={38} height={38} style={{ borderRadius: 9, flexShrink: 0 }} />
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <p style={{ margin: 0, fontSize: 14, fontWeight: 700 }}>Install PulseRetain</p>
+          <p style={{ margin: "2px 0 0", fontSize: 12, color: "#b9b9d6", lineHeight: 1.4 }}>
+            {install.canInstall
+              ? "Add it to your home screen for the full-screen app."
+              : "Tap the Share icon, then “Add to Home Screen.”"}
+          </p>
+        </div>
+        {install.canInstall ? (
+          <button onClick={install.promptInstall} style={{ background: "linear-gradient(135deg,#e74c3c,#c0392b)", color: "#fff", border: "none", borderRadius: 10, padding: "9px 18px", fontSize: 13, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap", flexShrink: 0 }}>Install</button>
+        ) : (
+          <svg width="20" height="24" viewBox="0 0 20 24" fill="none" stroke="#fff" strokeWidth="1.7" aria-hidden="true" style={{ flexShrink: 0 }}>
+            <path d="M10 2 V14 M6 6 L10 2 L14 6" strokeLinecap="round" strokeLinejoin="round" />
+            <path d="M5 10 H3 V22 H17 V10 H15" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+        )}
+        <button onClick={dismissInstall} aria-label="Dismiss install prompt" style={{ background: "transparent", border: "none", color: "#9a9ab5", fontSize: 22, cursor: "pointer", flexShrink: 0, lineHeight: 1, padding: "0 2px" }}>×</button>
+      </div>
+    )}
+    </>
   );
 }
