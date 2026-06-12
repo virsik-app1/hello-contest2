@@ -20,6 +20,27 @@ export function deriveRisk(member, ai) {
   return member.risk;
 }
 
+// "Today's Priorities" — the handful of members the owner should win back today.
+// Picks at-risk members not yet contacted (and not skipped), ranked high-risk
+// first, then by revenue-weighted urgency (score × $value) so the owner's effort
+// protects the most money first.
+export function pickTodaysQueue(members, opts = {}) {
+  const { aiResults = {}, outreachLog = [], dismissed = new Set(), size = 3 } = opts;
+  const contacted = new Set(outreachLog.map(o => o.memberId));
+  const riskRank = { high: 0, medium: 1, low: 2 };
+  const effScore = (m) => (aiResults[m.id] && !aiResults[m.id].error ? aiResults[m.id].score : m.score) || 0;
+
+  return (Array.isArray(members) ? members : [])
+    .filter(m => !contacted.has(m.id) && !dismissed.has(m.id) && deriveRisk(m, aiResults[m.id]) !== "low")
+    .sort((a, b) => {
+      const ra = riskRank[deriveRisk(a, aiResults[a.id])];
+      const rb = riskRank[deriveRisk(b, aiResults[b.id])];
+      if (ra !== rb) return ra - rb;                         // high-risk first
+      return effScore(b) * (Number(b.value) || 0) - effScore(a) * (Number(a.value) || 0); // then $ at risk
+    })
+    .slice(0, size);
+}
+
 // Dashboard stat cards (dynamic from current state).
 export function buildStats(members, outreachLog) {
   const highRisk  = members.filter(m => m.risk === "high").length;

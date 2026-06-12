@@ -1,4 +1,4 @@
-import { buildStats, deriveRisk, isResponse } from "./retention";
+import { buildStats, deriveRisk, isResponse, pickTodaysQueue } from "./retention";
 
 describe("isResponse", () => {
   test("only 'responded' and 'recovered' count as a response", () => {
@@ -50,5 +50,42 @@ describe("deriveRisk", () => {
     expect(deriveRisk(member, { error: "boom" })).toBe("medium");
     expect(deriveRisk(member, null)).toBe("medium");
     expect(deriveRisk(member, { riskLevel: "banana" })).toBe("medium");
+  });
+});
+
+describe("pickTodaysQueue", () => {
+  const roster = [
+    { id: 1, name: "High Big",   risk: "high",   score: 90, value: 159 },
+    { id: 2, name: "High Small", risk: "high",   score: 90, value: 49 },
+    { id: 3, name: "Medium",     risk: "medium", score: 55, value: 159 },
+    { id: 4, name: "Low",        risk: "low",    score: 10, value: 159 },
+  ];
+
+  test("excludes low-risk members", () => {
+    const q = pickTodaysQueue(roster, { size: 5 });
+    expect(q.find(m => m.id === 4)).toBeUndefined();
+  });
+
+  test("ranks high-risk first, then by revenue at risk (score × value)", () => {
+    const q = pickTodaysQueue(roster, { size: 3 });
+    expect(q.map(m => m.id)).toEqual([1, 2, 3]); // both highs before the medium; bigger $ high first
+  });
+
+  test("drops members already contacted or skipped", () => {
+    const q = pickTodaysQueue(roster, {
+      size: 3,
+      outreachLog: [{ memberId: 1, status: "sent" }],
+      dismissed: new Set([2]),
+    });
+    expect(q.map(m => m.id)).toEqual([3]); // 1 contacted, 2 skipped, 4 low → only the medium remains
+  });
+
+  test("honors the size cap", () => {
+    expect(pickTodaysQueue(roster, { size: 1 })).toHaveLength(1);
+  });
+
+  test("respects an AI upgrade from medium to high in ranking", () => {
+    const q = pickTodaysQueue(roster, { size: 4, aiResults: { 3: { riskLevel: "high", score: 95 } } });
+    expect(q.map(m => m.id)).toContain(3);
   });
 });

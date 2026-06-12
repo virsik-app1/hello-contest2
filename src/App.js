@@ -3,7 +3,7 @@ import { fetchAuthSession } from "aws-amplify/auth";
 import { Authenticator, useAuthenticator } from "@aws-amplify/ui-react";
 import "@aws-amplify/ui-react/styles.css";
 import { awsConfig } from "./aws-config";
-import { buildStats, deriveRisk } from "./retention";
+import { buildStats, deriveRisk, pickTodaysQueue } from "./retention";
 import { parseMembersCSV, SAMPLE_CSV_HEADERS, SAMPLE_CSV_ROWS, SAMPLE_GYM_CSV } from "./importMembers";
 import { computeInsights } from "./strategist";
 import { useState, useMemo, useEffect, useRef } from "react";
@@ -227,6 +227,7 @@ export default function App() {
   const [smsSent, setSmsSent]         = useState(new Set());
   const [intel, setIntel]             = useState(null);   // competitive-intel aggregate
   const [intelLoading, setIntelLoading] = useState(false);
+  const [dismissedToday, setDismissedToday] = useState(new Set()); // "Today's 3" skips
   const [toast, setToast]             = useState(null);
   const [dataLoading, setDataLoading] = useState(true);
   const [search, setSearch]           = useState("");
@@ -570,6 +571,29 @@ export default function App() {
     setLoading(prev => ({ ...prev, [member.id]: false }));
   };
 
+  // ── "Today's 3" queue actions ──────────────────────────────────────────────
+  function skipForToday(member) {
+    setDismissedToday(prev => new Set([...prev, member.id]));
+  }
+
+  // Prep every queued member that hasn't been analyzed yet (one tap → all ready)
+  const prepTodaysQueue = async () => {
+    const pending = todaysQueue.filter(m => !aiResults[m.id] && !loading[m.id]);
+    if (!pending.length) return;
+    setAnalyzing(true);
+    for (const m of pending) {
+      setLoading(prev => ({ ...prev, [m.id]: true }));
+      try {
+        const result = await runClaudeAnalysis(m);
+        setAiResults(prev => ({ ...prev, [m.id]: result }));
+      } catch {
+        setAiResults(prev => ({ ...prev, [m.id]: { error: "Couldn't reach the AI just now. Please try again." } }));
+      }
+      setLoading(prev => ({ ...prev, [m.id]: false }));
+    }
+    setAnalyzing(false);
+  };
+
   // ── Derived data ───────────────────────────────────────────────────────────
   const stats = useMemo(() => buildStats(members, outreachLog), [members, outreachLog]);
 
@@ -602,6 +626,11 @@ export default function App() {
   const insights = useMemo(
     () => computeInsights(members, { aiResults, intel, outreachLog }),
     [members, aiResults, intel, outreachLog]
+  );
+
+  const todaysQueue = useMemo(
+    () => pickTodaysQueue(members, { aiResults, outreachLog, dismissed: dismissedToday, size: 3 }),
+    [members, aiResults, outreachLog, dismissedToday]
   );
 
   // ══════════════════════════════════════════════════════════════════════════
@@ -729,6 +758,66 @@ export default function App() {
                       style={{ background: "#1a1a2e", color: "#fff", border: "none", borderRadius: 10, padding: "10px 16px", fontSize: 13, fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap" }}
                     >➕ Add Members</button>
                   </div>
+                </div>
+
+                {/* ── Today's Priorities (the daily action queue) ── */}
+                <div style={{ background: "linear-gradient(135deg,#1a1a2e,#23234a)", borderRadius: 16, padding: "20px 24px", marginBottom: 28, boxShadow: "0 4px 18px rgba(26,26,46,0.18)" }}>
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10, marginBottom: todaysQueue.length ? 16 : 0 }}>
+                    <div>
+                      <h2 style={{ margin: 0, fontSize: 17, fontWeight: 700, color: "#fff" }}>☀️ Today's Priorities</h2>
+                      <p style={{ margin: "2px 0 0", fontSize: 13, color: "#b9b9d6" }}>
+                        {todaysQueue.length
+                          ? `${todaysQueue.length} member${todaysQueue.length !== 1 ? "s" : ""} to win back today — highest revenue at risk first.`
+                          : "You're all caught up — no at-risk members need outreach right now. 🎉"}
+                      </p>
+                    </div>
+                    {todaysQueue.some(m => !aiResults[m.id]) && (
+                      <button onClick={prepTodaysQueue} disabled={analyzing} style={{ background: analyzing ? "#555" : "linear-gradient(135deg,#e74c3c,#c0392b)", color: "#fff", border: "none", borderRadius: 10, padding: "9px 18px", fontSize: 13, fontWeight: 700, cursor: analyzing ? "not-allowed" : "pointer", whiteSpace: "nowrap" }}>
+                        {analyzing ? "⏳ Prepping..." : "⚡ Prep all win-backs"}
+                      </button>
+                    )}
+                  </div>
+
+                  {todaysQueue.length > 0 && (
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 12 }}>
+                      {todaysQueue.map(m => {
+                        const rc = riskConfig[deriveRisk(m, aiResults[m.id])];
+                        const ai = aiResults[m.id];
+                        const isLoading = loading[m.id];
+                        return (
+                          <div key={m.id} style={{ background: "#fff", borderRadius: 12, padding: "14px 16px", display: "flex", flexDirection: "column" }}>
+                            <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
+                              <div style={{ width: 36, height: 36, borderRadius: "50%", background: rc.bg, color: rc.color, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, fontWeight: 700, flexShrink: 0, border: `1.5px solid ${rc.border}` }}>{m.initials}</div>
+                              <div style={{ minWidth: 0 }}>
+                                <p style={{ margin: 0, fontSize: 14, fontWeight: 700, color: "#1a1a2e", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{m.name}</p>
+                                <p style={{ margin: 0, fontSize: 11, color: "#888" }}>{m.lastVisit} · ${m.value}/mo at risk{m.missedPayments > 0 ? ` · ${m.missedPayments} missed` : ""}</p>
+                              </div>
+                            </div>
+
+                            {isLoading ? (
+                              <p style={{ margin: "4px 0 8px", fontSize: 12, color: "#f39c12" }}>⏳ Claude is writing the win-back…</p>
+                            ) : ai && !ai.error ? (
+                              <>
+                                <p style={{ margin: "0 0 10px", fontSize: 12, color: "#444", lineHeight: 1.5, fontStyle: "italic", background: "#fafbff", borderRadius: 8, padding: "8px 10px" }}>"{ai.message}"</p>
+                                <div style={{ display: "flex", gap: 6, marginTop: "auto" }}>
+                                  {!smsSent.has(m.id) && (
+                                    <button onClick={() => handleSendSMS(m, ai)} disabled={smsSending[m.id]} style={{ flex: 1, background: smsSending[m.id] ? "#ccc" : "linear-gradient(135deg,#27ae60,#1e7e45)", color: "#fff", border: "none", borderRadius: 8, padding: "8px 0", fontSize: 12, fontWeight: 700, cursor: smsSending[m.id] ? "not-allowed" : "pointer" }}>{smsSending[m.id] ? "⏳" : "📱 Send"}</button>
+                                  )}
+                                  <button onClick={() => markOutreach(m, ai)} style={{ flex: 1, background: "#e8f4fd", color: "#185fa5", border: "1px solid #b3d9f5", borderRadius: 8, padding: "8px 0", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>✓ Approve & Log</button>
+                                  <button onClick={() => skipForToday(m)} aria-label={`Skip ${m.name} for today`} style={{ background: "#f5f5f5", color: "#888", border: "1px solid #e0e0e0", borderRadius: 8, padding: "8px 10px", fontSize: 12, cursor: "pointer" }}>Skip</button>
+                                </div>
+                              </>
+                            ) : (
+                              <div style={{ display: "flex", gap: 6, marginTop: "auto" }}>
+                                <button onClick={() => analyzeOne(m)} style={{ flex: 1, background: "linear-gradient(135deg,#e74c3c,#c0392b)", color: "#fff", border: "none", borderRadius: 8, padding: "8px 0", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>⚡ Prep win-back</button>
+                                <button onClick={() => skipForToday(m)} aria-label={`Skip ${m.name} for today`} style={{ background: "#f5f5f5", color: "#888", border: "1px solid #e0e0e0", borderRadius: 8, padding: "8px 12px", fontSize: 12, cursor: "pointer" }}>Skip</button>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
                 </div>
 
                 {/* Stats */}
