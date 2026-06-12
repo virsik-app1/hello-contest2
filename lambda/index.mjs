@@ -110,6 +110,10 @@ async function saveMemberResult(memberId, aiResult) {
   }));
 }
 
+// NOTE: the pulseretain-outreach table's partition key is "logID" (capital ID),
+// not "logId". The original code used "logId" everywhere, so outreach logs never
+// actually persisted. We write the key as "logID" and expose "logId" to the
+// frontend on read (see loadAllOutreachLogs) so nothing else has to change.
 async function saveOutreachLog(log) {
   const logId = String(log?.id ?? "");
   if (!logId || logId.startsWith("conv-")) throw new Error("Invalid outreach log id");
@@ -117,7 +121,7 @@ async function saveOutreachLog(log) {
     TableName: OUTREACH_TABLE,
     Item: {
       ...log,
-      logId,
+      logID: logId,          // table primary key (correct spelling)
       type: "outreach",
       savedAt: new Date().toISOString(),
     },
@@ -131,16 +135,18 @@ async function loadAllMemberResults() {
 
 async function loadAllOutreachLogs() {
   const result = await dynamo.send(new ScanCommand({ TableName: OUTREACH_TABLE }));
-  // Conversation threads live in this table too (logId "conv-*") — keep them
-  // out of the outreach log the app renders.
-  return (result.Items || []).filter(i => i.type !== "conversation" && !String(i.logId).startsWith("conv-"));
+  // Conversation threads live in this table too (logID "conv-*") — keep them out
+  // of the outreach log the app renders. Expose "logId" to the frontend.
+  return (result.Items || [])
+    .filter(i => i.type !== "conversation" && !String(i.logID ?? "").startsWith("conv-"))
+    .map(i => ({ ...i, logId: i.logID }));
 }
 
 async function updateOutreachStatus(logId, status) {
   // Load existing item first
   const existing = await dynamo.send(new GetCommand({
     TableName: OUTREACH_TABLE,
-    Key: { logId: String(logId) },
+    Key: { logID: String(logId) },
   }));
   if (!existing.Item) throw new Error("Log not found");
   await dynamo.send(new PutCommand({
@@ -241,26 +247,37 @@ export function parseDraftJson(raw) {
 // ── Conversation persistence (reuses the outreach table — no new infra) ──────
 const convKey = (memberId) => `conv-${memberId}`;
 
+// Both are best-effort: persistence is a nice-to-have, so a storage hiccup must
+// never break the agent's ability to draft a reply.
 async function getConversation(memberId) {
-  const res = await dynamo.send(new GetCommand({
-    TableName: OUTREACH_TABLE,
-    Key: { logId: convKey(memberId) },
-  }));
-  return (res.Item && Array.isArray(res.Item.turns)) ? res.Item.turns : [];
+  try {
+    const res = await dynamo.send(new GetCommand({
+      TableName: OUTREACH_TABLE,
+      Key: { logID: convKey(memberId) },
+    }));
+    return (res.Item && Array.isArray(res.Item.turns)) ? res.Item.turns : [];
+  } catch (e) {
+    console.warn("getConversation failed (continuing without history):", e.message);
+    return [];
+  }
 }
 
 async function saveConversation(memberId, memberName, turns) {
-  await dynamo.send(new PutCommand({
-    TableName: OUTREACH_TABLE,
-    Item: {
-      logId: convKey(memberId),
-      memberId: String(memberId),
-      memberName: memberName || "",
-      type: "conversation",
-      turns: turns.slice(-40), // keep the last 40 turns — plenty for SMS threads
-      updatedAt: new Date().toISOString(),
-    },
-  }));
+  try {
+    await dynamo.send(new PutCommand({
+      TableName: OUTREACH_TABLE,
+      Item: {
+        logID: convKey(memberId),
+        memberId: String(memberId),
+        memberName: memberName || "",
+        type: "conversation",
+        turns: turns.slice(-40), // keep the last 40 turns — plenty for SMS threads
+        updatedAt: new Date().toISOString(),
+      },
+    }));
+  } catch (e) {
+    console.warn("saveConversation failed (draft still returned):", e.message);
+  }
 }
 
 // ─── Lead handling: save to DynamoDB + email notification ─────────────────────
