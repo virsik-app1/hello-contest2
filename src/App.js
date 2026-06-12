@@ -128,6 +128,42 @@ Member: ${member.name}, on ${member.plan} ($${member.value}/mo), ${member.joined
   return JSON.parse(match[0]);
 }
 
+// ─── Reply agent API (new Lambda "draft_reply") ───────────────────────────────
+// Tries the dedicated conversational-agent backend first. Returns null if the
+// deployed Lambda doesn't know the action yet (not upgraded), so the caller
+// can fall back to the legacy inline-prompt path — pushing this frontend can
+// never break the live app.
+async function draftReplyAgent(member, memberMessage, originalOutreach) {
+  const res = await apiFetch({
+    action: "draft_reply",
+    memberId: member.id,
+    member: {
+      name: member.name, plan: member.plan, value: member.value,
+      joinedMonths: member.joinedMonths, usualVisits: member.usualVisits, lastVisit: member.lastVisit,
+    },
+    memberMessage,
+    originalOutreach,
+  });
+  const data = await res.json().catch(() => ({}));
+  if (res.status === 400 && data.error === "Unknown action.") return null; // old Lambda
+  if (!res.ok) throw new Error(data.error || `Server returned ${res.status}`);
+  return data; // { success, draft, turns }
+}
+
+async function fetchConversation(memberId) {
+  const res = await apiFetch({ action: "get_conversation", memberId });
+  if (!res.ok) return null; // old Lambda or error — thread UI just stays hidden
+  const data = await res.json().catch(() => null);
+  return data && Array.isArray(data.turns) ? data.turns : null;
+}
+
+async function logReplySent(member, text) {
+  const res = await apiFetch({ action: "log_reply_sent", memberId: member.id, memberName: member.name, text });
+  if (!res.ok) return null;
+  const data = await res.json().catch(() => null);
+  return data && Array.isArray(data.turns) ? data.turns : null;
+}
+
 // ─── Offer badge labels ───────────────────────────────────────────────────────
 const offerLabels = {
   class_credit:            "🎟 Free Class Credit",
@@ -161,6 +197,7 @@ export default function App() {
   const [replyDrafts, setReplyDrafts]   = useState({});   // Claude's drafted response, keyed by member id
   const [replyLoading, setReplyLoading] = useState({});
   const [replySending, setReplySending] = useState({});
+  const [convs, setConvs]               = useState({});   // conversation threads, keyed by member id
   const { authStatus } = useAuthenticator((c) => [c.authStatus]);
 
   // ── Load persisted data from DynamoDB once the user is signed in ──────────
@@ -214,6 +251,16 @@ export default function App() {
     loadData();
     return () => { cancelled = true; };
   }, [authStatus]);
+
+  // ── Load a member's conversation thread when their row is expanded ────────
+  useEffect(() => {
+    if (!selected || convs[selected] !== undefined) return;
+    let cancelled = false;
+    fetchConversation(selected).then(turns => {
+      if (!cancelled) setConvs(prev => ({ ...prev, [selected]: turns || [] }));
+    });
+    return () => { cancelled = true; };
+  }, [selected, convs]);
 
   // ── Close the member modal with the Escape key (accessibility) ────────────
   useEffect(() => {
@@ -320,12 +367,28 @@ export default function App() {
     if (!text) { showToast("Type the member's reply first"); return; }
     setReplyLoading(prev => ({ ...prev, [member.id]: true }));
     try {
-      const draft = await runClaudeReply(member, ai?.message || "(prior outreach)", text);
-      setReplyDrafts(prev => ({ ...prev, [member.id]: draft }));
-    } catch {
-      setReplyDrafts(prev => ({ ...prev, [member.id]: { error: "Couldn't draft a reply just now. Please try again." } }));
+      // Agent backend first (multi-turn memory + server-side guardrails)…
+      const agent = await draftReplyAgent(member, text, ai?.message);
+      if (agent) {
+        setReplyDrafts(prev => ({ ...prev, [member.id]: agent.draft }));
+        setConvs(prev => ({ ...prev, [member.id]: agent.turns }));
+        setReplyText(prev => ({ ...prev, [member.id]: "" })); // message is in the thread now
+      } else {
+        // …fallback for the not-yet-upgraded Lambda: legacy single-shot draft.
+        const draft = await runClaudeReply(member, ai?.message || "(prior outreach)", text);
+        setReplyDrafts(prev => ({ ...prev, [member.id]: draft }));
+      }
+    } catch (err) {
+      setReplyDrafts(prev => ({ ...prev, [member.id]: { error: err.message || "Couldn't draft a reply just now. Please try again." } }));
     }
     setReplyLoading(prev => ({ ...prev, [member.id]: false }));
+  }
+
+  // Record the approved studio text on the thread (works with or without SMS).
+  async function recordReplyOnThread(member, text) {
+    const turns = await logReplySent(member, text);
+    if (turns) setConvs(prev => ({ ...prev, [member.id]: turns }));
+    setReplyDrafts(prev => ({ ...prev, [member.id]: null })); // draft consumed either way
   }
 
   async function sendReplySMS(member) {
@@ -335,11 +398,19 @@ export default function App() {
     setReplySending(prev => ({ ...prev, [member.id]: true }));
     try {
       await sendRealSMS(member.phone, draft.reply);
+      await recordReplyOnThread(member, draft.reply);
       showToast(`📱 Reply sent to ${member.name.split(" ")[0]}!`);
     } catch (err) {
       showToast(`❌ Reply failed: ${err.message}`);
     }
     setReplySending(prev => ({ ...prev, [member.id]: false }));
+  }
+
+  async function approveReplyNoSMS(member) {
+    const draft = replyDrafts[member.id];
+    if (!draft || draft.error) return;
+    await recordReplyOnThread(member, draft.reply);
+    showToast(`✓ Reply approved & logged for ${member.name.split(" ")[0]}`);
   }
 
   function copyReply(member) {
@@ -692,6 +763,23 @@ export default function App() {
                                 {/* ── Conversational retention: handle the member's reply ── */}
                                 <div style={{ marginTop: 16, paddingTop: 16, borderTop: "1px dashed #e0e0e0" }}>
                                   <p style={{ margin: "0 0 8px", fontSize: 11, fontWeight: 600, color: "#8e44ad", textTransform: "uppercase", letterSpacing: 0.5 }}>💬 Member replied? Let Claude handle the conversation</p>
+
+                                  {/* Conversation thread (multi-turn memory from the agent backend) */}
+                                  {(convs[m.id] || []).length > 0 && (
+                                    <div role="log" aria-label={`Conversation with ${m.name}`} style={{ maxHeight: 220, overflowY: "auto", marginBottom: 10, padding: "10px 12px", background: "#fff", border: "1px solid #eee", borderRadius: 10, display: "flex", flexDirection: "column", gap: 6 }}>
+                                      {convs[m.id].map((t, i) => (
+                                        <div key={i} style={{ alignSelf: t.role === "member" ? "flex-end" : "flex-start", maxWidth: "80%" }}>
+                                          <p style={{ margin: "0 0 2px", fontSize: 9, fontWeight: 700, color: "#bbb", textTransform: "uppercase", letterSpacing: 0.5, textAlign: t.role === "member" ? "right" : "left" }}>
+                                            {t.role === "member" ? m.name.split(" ")[0] : "Studio"}
+                                          </p>
+                                          <div style={{ background: t.role === "member" ? "#fff1f1" : "#f5f0ff", border: `1px solid ${t.role === "member" ? "#fbc9c9" : "#e0d3f5"}`, borderRadius: 10, padding: "7px 11px", fontSize: 12.5, color: "#333", lineHeight: 1.5 }}>
+                                            {t.text}
+                                          </div>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  )}
+
                                   <textarea
                                     value={replyText[m.id] || ""}
                                     onChange={e => setReplyText(prev => ({ ...prev, [m.id]: e.target.value }))}
@@ -723,11 +811,17 @@ export default function App() {
                                             <span style={{ background: "#f0faf4", color: "#1e7e45", fontSize: 11, fontWeight: 600, padding: "2px 9px", borderRadius: 20, border: "1px solid #b6e8c8" }}>{offerLabels[d.suggestedOffer]}</span>
                                           )}
                                         </div>
+                                        {d.escalate && (
+                                          <p style={{ margin: "0 0 8px", fontSize: 12, fontWeight: 600, color: "#c0392b", background: "#fff1f1", border: "1px solid #fbc9c9", borderRadius: 8, padding: "6px 10px" }}>
+                                            ⚠ The AI recommends the owner handle this one personally
+                                          </p>
+                                        )}
                                         <p style={{ margin: "0 0 4px", fontSize: 11, fontWeight: 600, color: "#8e44ad", textTransform: "uppercase", letterSpacing: 0.5 }}>Claude's suggested reply</p>
                                         <div style={{ background: "#fff", border: "1px solid #e8e8e8", borderRadius: 8, padding: "10px 14px", fontSize: 13, color: "#333", lineHeight: 1.6, fontStyle: "italic" }}>"{d.reply}"</div>
                                         {d.nextStep && <p style={{ margin: "8px 0 0", fontSize: 12, color: "#666" }}>🧭 {d.nextStep}</p>}
                                         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 10 }}>
                                           <button onClick={() => sendReplySMS(m)} disabled={replySending[m.id]} style={{ background: replySending[m.id] ? "#ccc" : "linear-gradient(135deg,#27ae60,#1e7e45)", color: "#fff", border: "none", borderRadius: 8, padding: "7px 14px", fontSize: 12, fontWeight: 600, cursor: replySending[m.id] ? "not-allowed" : "pointer" }}>{replySending[m.id] ? "⏳ Sending..." : "📱 Send Reply"}</button>
+                                          <button onClick={() => approveReplyNoSMS(m)} aria-label="Approve and log reply without sending SMS" style={{ background: "linear-gradient(135deg,#185fa5,#0c447c)", color: "#fff", border: "none", borderRadius: 8, padding: "7px 14px", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>✓ Approve & Log</button>
                                           <button onClick={() => copyReply(m)} aria-label="Copy drafted reply" style={{ background: "#fff", color: "#8e44ad", border: "1px solid #d7b9f5", borderRadius: 8, padding: "7px 14px", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>📋 Copy</button>
                                           <button onClick={() => draftReply(m, ai)} aria-label="Redraft reply" style={{ background: "#fff", color: "#555", border: "1px solid #ddd", borderRadius: 8, padding: "7px 14px", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>↻ Redraft</button>
                                         </div>
