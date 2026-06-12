@@ -5,6 +5,7 @@ import "@aws-amplify/ui-react/styles.css";
 import { awsConfig } from "./aws-config";
 import { buildStats, deriveRisk } from "./retention";
 import { parseMembersCSV, SAMPLE_CSV_HEADERS, SAMPLE_CSV_ROWS, SAMPLE_GYM_CSV } from "./importMembers";
+import { computeInsights } from "./strategist";
 import { useState, useMemo, useEffect, useRef } from "react";
 
 Amplify.configure(awsConfig);
@@ -184,7 +185,15 @@ const offerLabels = {
 };
 
 // ─── Nav tabs ─────────────────────────────────────────────────────────────────
-const TABS = ["Dashboard", "Outreach", "Analytics", "Competitors"];
+const TABS = ["Dashboard", "Strategist", "Outreach", "Analytics", "Competitors"];
+
+// Severity styling for Retention Strategist findings
+const severityMeta = {
+  high:   { chip: "Critical", color: "#c0392b", bg: "#fff1f1", border: "#fbc9c9", icon: "🔴" },
+  medium: { chip: "Watch",    color: "#b7770d", bg: "#fffbf0", border: "#fde8a8", icon: "🟡" },
+  info:   { chip: "Insight",  color: "#185fa5", bg: "#e8f4fd", border: "#b3d9f5", icon: "🔵" },
+  good:   { chip: "Win",      color: "#1e7e45", bg: "#f0faf4", border: "#b6e8c8", icon: "✅" },
+};
 
 // Labels for the competitive-intel "why they leave" breakdown
 const reasonMeta = {
@@ -298,9 +307,9 @@ export default function App() {
     return () => window.removeEventListener("keydown", onKey);
   }, [modalMember]);
 
-  // ── Load competitive intelligence whenever the Competitors tab opens ───────
+  // ── Load competitive intelligence for the Competitors & Strategist tabs ────
   useEffect(() => {
-    if (activeTab !== "Competitors") return;
+    if (activeTab !== "Competitors" && activeTab !== "Strategist") return;
     let cancelled = false;
     setIntelLoading(true);
     fetchCompetitiveIntel().then(data => {
@@ -589,6 +598,11 @@ export default function App() {
       totalRevenue: members.reduce((a, m) => a + m.value, 0),
     };
   }, [members]);
+
+  const insights = useMemo(
+    () => computeInsights(members, { aiResults, intel, outreachLog }),
+    [members, aiResults, intel, outreachLog]
+  );
 
   // ══════════════════════════════════════════════════════════════════════════
   return (
@@ -1122,6 +1136,62 @@ export default function App() {
                     )}
                   </div>
                 </div>
+              </>
+            )}
+
+            {/* ════════════════════════════════════════════════════════════
+                TAB: STRATEGIST (Retention Strategist — root-cause insights)
+            ════════════════════════════════════════════════════════════ */}
+            {activeTab === "Strategist" && (
+              <>
+                <div style={{ marginBottom: 22 }}>
+                  <h1 style={{ margin: 0, fontSize: 26, fontWeight: 700, color: "#1a1a2e" }}>Retention Strategist</h1>
+                  <p style={{ margin: "4px 0 0", color: "#888", fontSize: 14 }}>Not just <em>who's</em> leaving — <strong>why your gym is losing members, and what to change.</strong></p>
+                </div>
+
+                {/* Headline metrics */}
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", gap: 16, marginBottom: 22 }}>
+                  {[
+                    { label: "Members at Risk", value: String(insights.atRisk), sub: "high-risk right now", accent: insights.atRisk > 0 },
+                    { label: "Revenue at Risk", value: `$${insights.revenueAtRisk.toLocaleString()}/mo`, sub: `≈ $${insights.projectedAnnual.toLocaleString()}/yr`, accent: insights.revenueAtRisk > 0 },
+                    { label: "Biggest Leak", value: insights.topLeak ? "1 priority" : "—", sub: insights.topLeak || "no major leak detected", accent: false, small: true },
+                  ].map((c, i) => (
+                    <div key={i} style={{ background: "#fff", borderRadius: 12, padding: "18px 20px", boxShadow: "0 1px 4px rgba(0,0,0,0.07)", borderTop: c.accent ? "3px solid #e74c3c" : "3px solid #1a1a2e" }}>
+                      <p style={{ margin: 0, fontSize: c.small ? 14 : 26, fontWeight: 700, color: c.accent ? "#e74c3c" : "#1a1a2e", lineHeight: 1.3 }}>{c.value}</p>
+                      <p style={{ margin: "3px 0 0", fontSize: 12, color: "#555" }}>{c.label}</p>
+                      <p style={{ margin: "1px 0 0", fontSize: 11, color: "#aaa" }}>{c.sub}</p>
+                    </div>
+                  ))}
+                </div>
+
+                {/* Findings */}
+                {insights.findings.length === 0 ? (
+                  <div style={{ background: "#fff", borderRadius: 14, boxShadow: "0 1px 4px rgba(0,0,0,0.07)", padding: "48px 24px", textAlign: "center" }}>
+                    <p style={{ fontSize: 32, margin: "0 0 8px" }}>🧭</p>
+                    <p style={{ fontSize: 16, fontWeight: 600, color: "#1a1a2e", margin: "0 0 6px" }}>No major leaks detected</p>
+                    <p style={{ fontSize: 13, color: "#888", margin: "0 auto", maxWidth: 440, lineHeight: 1.6 }}>Load a member roster (▲ Add Members) or run AI analysis, and the Strategist will surface where your gym is losing members and what to change.</p>
+                  </div>
+                ) : (
+                  <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+                    {insights.findings.map(f => {
+                      const sv = severityMeta[f.severity] || severityMeta.info;
+                      return (
+                        <div key={f.id} style={{ background: "#fff", borderRadius: 14, boxShadow: "0 1px 4px rgba(0,0,0,0.07)", borderLeft: `4px solid ${sv.color}`, padding: "16px 20px" }}>
+                          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+                            <span style={{ fontSize: 14 }}>{sv.icon}</span>
+                            <span style={{ background: sv.bg, color: sv.color, fontSize: 11, fontWeight: 700, padding: "2px 9px", borderRadius: 20, border: `1px solid ${sv.border}`, textTransform: "uppercase", letterSpacing: 0.5 }}>{sv.chip}</span>
+                            <h3 style={{ margin: 0, fontSize: 15, fontWeight: 700, color: "#1a1a2e" }}>{f.title}</h3>
+                          </div>
+                          <p style={{ margin: "0 0 8px", fontSize: 13, color: "#555", lineHeight: 1.6 }}>{f.detail}</p>
+                          <p style={{ margin: 0, fontSize: 13, color: sv.color, fontWeight: 600, lineHeight: 1.5 }}>→ {f.action}</p>
+                        </div>
+                      );
+                    })}
+                    <p style={{ textAlign: "center", marginTop: 6, fontSize: 12, color: "#aaa", fontStyle: "italic" }}>
+                      Every churn predictor tells you who's leaving. The Strategist reads the AI's read on each member and tells you the <em>pattern</em> — and the fix.
+                    </p>
+                  </div>
+                )}
               </>
             )}
 
