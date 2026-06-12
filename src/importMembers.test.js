@@ -1,4 +1,4 @@
-import { parseCSV, mapRowsToMembers, parseMembersCSV, scoreMember } from "./importMembers";
+import { parseCSV, mapRowsToMembers, parseMembersCSV, scoreMember, SAMPLE_GYM_CSV } from "./importMembers";
 
 // Fixed "now" so date math is deterministic: 2026-06-12T00:00:00Z
 const NOW = Date.parse("2026-06-12T00:00:00Z");
@@ -71,5 +71,21 @@ describe("mapRowsToMembers", () => {
   test("ids are sequential starting at 1", () => {
     const ms = mapRowsToMembers(parseCSV(csv), NOW);
     expect(ms.map(m => m.id)).toEqual([1, 2]);
+  });
+});
+
+describe("SAMPLE_GYM_CSV (the built-in demo roster)", () => {
+  const ms = parseMembersCSV(SAMPLE_GYM_CSV, NOW);
+  test("parses to 20 members", () => {
+    expect(ms).toHaveLength(20);
+  });
+  test("has a realistic risk spread (some high, some low)", () => {
+    const high = ms.filter(m => m.risk === "high").length;
+    const low = ms.filter(m => m.risk === "low").length;
+    expect(high).toBeGreaterThanOrEqual(4);
+    expect(low).toBeGreaterThanOrEqual(4);
+  });
+  test("every member has a name, plan, value, and score", () => {
+    expect(ms.every(m => m.name && m.plan && m.value > 0 && Number.isFinite(m.score))).toBe(true);
   });
 });

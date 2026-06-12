@@ -4,7 +4,7 @@ import { Authenticator, useAuthenticator } from "@aws-amplify/ui-react";
 import "@aws-amplify/ui-react/styles.css";
 import { awsConfig } from "./aws-config";
 import { buildStats, deriveRisk } from "./retention";
-import { parseMembersCSV, SAMPLE_CSV_HEADERS, SAMPLE_CSV_ROWS } from "./importMembers";
+import { parseMembersCSV, SAMPLE_CSV_HEADERS, SAMPLE_CSV_ROWS, SAMPLE_GYM_CSV } from "./importMembers";
 import { useState, useMemo, useEffect, useRef } from "react";
 
 Amplify.configure(awsConfig);
@@ -200,6 +200,11 @@ export default function App() {
   const [members, setMembers]         = useState(initialMembers);
   const [usingImported, setUsingImported] = useState(false);
   const importInputRef                = useRef(null);
+  const [showData, setShowData]       = useState(false);    // "Add members" modal
+  const [dataTab, setDataTab]         = useState("sample");  // sample | upload | paste | single
+  const [pasteText, setPasteText]     = useState("");
+  const blankMember = { name: "", plan: "", value: "", lastVisit: "", joinDate: "", missedPayments: "", classesBooked: "", schedule: "", email: "", phone: "" };
+  const [addForm, setAddForm]         = useState(blankMember);
   const [selected, setSelected]       = useState(null);
   const [aiResults, setAiResults]     = useState({});
   const [loading, setLoading]         = useState({});
@@ -337,7 +342,31 @@ export default function App() {
     );
   }
 
-  // ── Import a real gym's member roster from a CSV (parsed in-browser) ────────
+  // ── Bring in a real member roster (parsed entirely in-browser) ─────────────
+  // Replace the whole roster and reset the view so trends reflect it at once.
+  function applyRoster(list, label) {
+    setMembers(list);
+    setUsingImported(true);
+    setSelected(null);
+    setAiResults({});              // clear demo analyses; these are real members now
+    setFilterRisk("all");
+    setSearch("");
+    setShowData(false);
+    setActiveTab("Dashboard");
+    showToast(`✓ Loaded ${list.length} members${label ? ` · ${label}` : ""}`);
+  }
+
+  function loadSampleGym() {
+    applyRoster(parseMembersCSV(SAMPLE_GYM_CSV, Date.now()), "sample gym");
+  }
+
+  function loadPastedRoster() {
+    const list = parseMembersCSV(pasteText, Date.now());
+    if (!list.length) { showToast("No members found — include a header row with at least a Name column"); return; }
+    applyRoster(list);
+    setPasteText("");
+  }
+
   function handleImportFile(e) {
     const file = e.target.files && e.target.files[0];
     if (!file) return;
@@ -345,24 +374,28 @@ export default function App() {
     reader.onload = () => {
       try {
         const imported = parseMembersCSV(reader.result, Date.now());
-        if (!imported.length) {
-          showToast("No members found — file needs at least a Name column");
-          return;
-        }
-        setMembers(imported);
-        setUsingImported(true);
-        setSelected(null);
-        setAiResults({});            // clear demo analyses; these are real members now
-        setFilterRisk("all");
-        setSearch("");
-        setActiveTab("Dashboard");
-        showToast(`✓ Imported ${imported.length} members from your file`);
+        if (!imported.length) { showToast("No members found — file needs at least a Name column"); return; }
+        applyRoster(imported, file.name);
       } catch {
         showToast("Couldn't read that CSV — make sure it's a comma-separated export");
       }
     };
     reader.readAsText(file);
     e.target.value = "";             // let the same file be re-imported
+  }
+
+  // Add a single member by hand — reuses the CSV mapper so scoring is identical.
+  function addSingleMember() {
+    const esc = (v) => `"${String(v ?? "").replace(/"/g, '""')}"`;
+    const f = addForm;
+    const row = [f.name, f.email, f.phone, f.plan, f.value, f.lastVisit, f.joinDate, f.missedPayments, f.classesBooked, f.schedule];
+    const csv = SAMPLE_CSV_HEADERS.map(esc).join(",") + "\n" + row.map(esc).join(",");
+    const parsed = parseMembersCSV(csv, Date.now());
+    if (!parsed.length) { showToast("Add at least a name"); return; }
+    setMembers(prev => [...prev, { ...parsed[0], id: prev.reduce((mx, x) => Math.max(mx, x.id), 0) + 1 }]);
+    setUsingImported(true);
+    setAddForm(blankMember);
+    showToast(`✓ Added ${parsed[0].name}`);
   }
 
   function resetToDemo() {
@@ -676,25 +709,11 @@ export default function App() {
                       aria-label="Export member list as CSV"
                       style={{ background: "#fff", color: "#1a1a2e", border: "1px solid #ddd", borderRadius: 10, padding: "10px 16px", fontSize: 13, fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap" }}
                     >⬇ Export CSV</button>
-                    {/* Import a real member roster (CSV) */}
-                    <input
-                      ref={importInputRef}
-                      type="file"
-                      accept=".csv,text/csv"
-                      onChange={handleImportFile}
-                      style={{ display: "none" }}
-                      aria-hidden="true"
-                    />
                     <button
-                      onClick={() => importInputRef.current && importInputRef.current.click()}
-                      aria-label="Import your gym's members from a CSV file"
+                      onClick={() => setShowData(true)}
+                      aria-label="Add or import your gym's members"
                       style={{ background: "#1a1a2e", color: "#fff", border: "none", borderRadius: 10, padding: "10px 16px", fontSize: 13, fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap" }}
-                    >⬆ Import Members</button>
-                    <button
-                      onClick={downloadImportTemplate}
-                      aria-label="Download a CSV import template"
-                      style={{ background: "none", color: "#888", border: "none", fontSize: 12, cursor: "pointer", textDecoration: "underline", whiteSpace: "nowrap" }}
-                    >template</button>
+                    >➕ Add Members</button>
                   </div>
                 </div>
 
@@ -1205,6 +1224,94 @@ export default function App() {
 
             <p style={{ textAlign: "center", marginTop: 24, fontSize: 12, color: "#ccc" }}>PulseRetain · Powered by Claude AI · Demo roster (synthetic) — Mindbody/Glofox sync on roadmap</p>
           </div>
+
+          {/* ── Add / Import Members Modal ── */}
+          {showData && (() => {
+            const inputStyle = { width: "100%", boxSizing: "border-box", padding: "8px 10px", border: "1px solid #ddd", borderRadius: 8, fontSize: 13, fontFamily: "inherit", outline: "none" };
+            const tabBtn = (key, label) => (
+              <button key={key} onClick={() => setDataTab(key)} style={{ flex: 1, background: dataTab === key ? "#1a1a2e" : "#f3f4f7", color: dataTab === key ? "#fff" : "#555", border: "none", borderRadius: 8, padding: "8px 6px", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>{label}</button>
+            );
+            const addFields = [
+              { key: "name", label: "Full name", ph: "Jordan Smith", full: true },
+              { key: "plan", label: "Plan", ph: "Unlimited Monthly" },
+              { key: "value", label: "Monthly value ($)", ph: "159" },
+              { key: "lastVisit", label: "Last visit", ph: "2026-06-08 or 5 days ago" },
+              { key: "joinDate", label: "Member since", ph: "2024-03-01" },
+              { key: "missedPayments", label: "Missed payments", ph: "0" },
+              { key: "classesBooked", label: "Classes booked ahead", ph: "2" },
+              { key: "schedule", label: "Usual schedule", ph: "Mon & Wed" },
+              { key: "email", label: "Email (optional)", ph: "jordan@email.com" },
+              { key: "phone", label: "Phone (optional)", ph: "(704) 555-0100" },
+            ];
+            return (
+              <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 200, padding: 16 }} onClick={() => setShowData(false)}>
+                <div role="dialog" aria-modal="true" aria-label="Add members" style={{ background: "#fff", borderRadius: 16, padding: "24px 26px", maxWidth: 560, width: "100%", maxHeight: "88vh", overflowY: "auto", boxShadow: "0 20px 60px rgba(0,0,0,0.25)" }} onClick={e => e.stopPropagation()}>
+                  <div style={{ display: "flex", alignItems: "center", marginBottom: 4 }}>
+                    <h2 style={{ margin: 0, fontSize: 19, fontWeight: 700, color: "#1a1a2e" }}>Add members</h2>
+                    <span style={{ marginLeft: 10, fontSize: 12, color: "#aaa" }}>roster: {members.length}</span>
+                    <button autoFocus onClick={() => setShowData(false)} aria-label="Close" style={{ marginLeft: "auto", background: "none", border: "none", fontSize: 22, cursor: "pointer", color: "#aaa" }}>×</button>
+                  </div>
+                  <p style={{ margin: "0 0 16px", fontSize: 13, color: "#888" }}>Drop in real member data and the dashboard, analytics, and AI run on it instantly. Parsed in your browser — never uploaded.</p>
+
+                  <div style={{ display: "flex", gap: 6, marginBottom: 18 }}>
+                    {tabBtn("sample", "⚡ Sample gym")}
+                    {tabBtn("upload", "⬆ Upload CSV")}
+                    {tabBtn("paste", "📋 Paste list")}
+                    {tabBtn("single", "✏️ Add one")}
+                  </div>
+
+                  {dataTab === "sample" && (
+                    <div style={{ textAlign: "center", padding: "8px 0 4px" }}>
+                      <p style={{ fontSize: 13, color: "#555", lineHeight: 1.6, margin: "0 0 16px" }}>Load a realistic <strong>20-member boutique studio</strong> — a healthy mix of at-risk, drifting, and loyal members — and watch the risk monitor and analytics populate in one click.</p>
+                      <button onClick={loadSampleGym} style={{ background: "linear-gradient(135deg,#e74c3c,#c0392b)", color: "#fff", border: "none", borderRadius: 10, padding: "12px 24px", fontSize: 14, fontWeight: 700, cursor: "pointer", boxShadow: "0 4px 14px rgba(231,76,60,0.35)" }}>⚡ Load 20-member sample gym</button>
+                    </div>
+                  )}
+
+                  {dataTab === "upload" && (
+                    <div style={{ textAlign: "center", padding: "8px 0 4px" }}>
+                      <input ref={importInputRef} type="file" accept=".csv,text/csv" onChange={handleImportFile} style={{ display: "none" }} aria-hidden="true" />
+                      <p style={{ fontSize: 13, color: "#555", lineHeight: 1.6, margin: "0 0 16px" }}>Upload a CSV exported from Mindbody, Glofox, ABC, PushPress, or any spreadsheet. Columns are auto-detected (name, last visit, plan, etc.).</p>
+                      <button onClick={() => importInputRef.current && importInputRef.current.click()} style={{ background: "#1a1a2e", color: "#fff", border: "none", borderRadius: 10, padding: "12px 24px", fontSize: 14, fontWeight: 700, cursor: "pointer" }}>⬆ Choose CSV file</button>
+                    </div>
+                  )}
+
+                  {dataTab === "paste" && (
+                    <div>
+                      <p style={{ fontSize: 13, color: "#555", margin: "0 0 8px" }}>Paste rows from your spreadsheet, <strong>including the header row</strong>:</p>
+                      <textarea
+                        value={pasteText}
+                        onChange={e => setPasteText(e.target.value)}
+                        placeholder={"Name, Plan, Monthly Value, Last Visit, Join Date, Missed Payments, Classes Booked\nJordan Smith, Unlimited Monthly, 159, 2026-06-08, 2024-03-01, 0, 2"}
+                        rows={7}
+                        style={{ ...inputStyle, resize: "vertical", fontFamily: "monospace", fontSize: 12 }}
+                      />
+                      <button onClick={loadPastedRoster} disabled={!pasteText.trim()} style={{ marginTop: 10, background: pasteText.trim() ? "#1a1a2e" : "#ccc", color: "#fff", border: "none", borderRadius: 10, padding: "10px 20px", fontSize: 13, fontWeight: 700, cursor: pasteText.trim() ? "pointer" : "not-allowed" }}>Load these members</button>
+                    </div>
+                  )}
+
+                  {dataTab === "single" && (
+                    <div>
+                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                        {addFields.map(f => (
+                          <div key={f.key} style={{ gridColumn: f.full ? "1 / -1" : "auto" }}>
+                            <label style={{ display: "block", fontSize: 11, fontWeight: 600, color: "#888", marginBottom: 3 }}>{f.label}</label>
+                            <input value={addForm[f.key]} onChange={e => setAddForm(p => ({ ...p, [f.key]: e.target.value }))} placeholder={f.ph} style={inputStyle} />
+                          </div>
+                        ))}
+                      </div>
+                      <button onClick={addSingleMember} disabled={!addForm.name.trim()} style={{ marginTop: 14, background: addForm.name.trim() ? "linear-gradient(135deg,#27ae60,#1e7e45)" : "#ccc", color: "#fff", border: "none", borderRadius: 10, padding: "10px 20px", fontSize: 13, fontWeight: 700, cursor: addForm.name.trim() ? "pointer" : "not-allowed" }}>➕ Add member</button>
+                      <span style={{ marginLeft: 12, fontSize: 12, color: "#aaa" }}>Adds to your roster — keep going to add several.</span>
+                    </div>
+                  )}
+
+                  <div style={{ marginTop: 20, paddingTop: 14, borderTop: "1px solid #f0f0f0", display: "flex", alignItems: "center", gap: 12 }}>
+                    <button onClick={downloadImportTemplate} style={{ background: "none", color: "#185fa5", border: "none", fontSize: 12, cursor: "pointer", textDecoration: "underline", padding: 0 }}>⬇ Download CSV template</button>
+                    {usingImported && <button onClick={resetToDemo} style={{ marginLeft: "auto", background: "none", color: "#888", border: "none", fontSize: 12, cursor: "pointer", textDecoration: "underline", padding: 0 }}>↺ reset to demo roster</button>}
+                  </div>
+                </div>
+              </div>
+            );
+          })()}
 
           {/* ── Member Detail Modal ── */}
           {modalMember && (() => {
