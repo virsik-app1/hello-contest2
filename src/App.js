@@ -4,7 +4,8 @@ import { Authenticator, useAuthenticator } from "@aws-amplify/ui-react";
 import "@aws-amplify/ui-react/styles.css";
 import { awsConfig } from "./aws-config";
 import { buildStats, deriveRisk } from "./retention";
-import { useState, useMemo, useEffect } from "react";
+import { parseMembersCSV, SAMPLE_CSV_HEADERS, SAMPLE_CSV_ROWS } from "./importMembers";
+import { useState, useMemo, useEffect, useRef } from "react";
 
 Amplify.configure(awsConfig);
 
@@ -196,7 +197,9 @@ const reasonMeta = {
 };
 
 export default function App() {
-  const [members]                     = useState(initialMembers);
+  const [members, setMembers]         = useState(initialMembers);
+  const [usingImported, setUsingImported] = useState(false);
+  const importInputRef                = useRef(null);
   const [selected, setSelected]       = useState(null);
   const [aiResults, setAiResults]     = useState({});
   const [loading, setLoading]         = useState({});
@@ -332,6 +335,46 @@ export default function App() {
       ["Member", "Plan", "Value/mo", "Sent At", "Status", "Message"],
       outreachLog.map(l => [l.memberName, l.plan, l.value, l.sentAt, l.status, l.message])
     );
+  }
+
+  // ── Import a real gym's member roster from a CSV (parsed in-browser) ────────
+  function handleImportFile(e) {
+    const file = e.target.files && e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const imported = parseMembersCSV(reader.result, Date.now());
+        if (!imported.length) {
+          showToast("No members found — file needs at least a Name column");
+          return;
+        }
+        setMembers(imported);
+        setUsingImported(true);
+        setSelected(null);
+        setAiResults({});            // clear demo analyses; these are real members now
+        setFilterRisk("all");
+        setSearch("");
+        setActiveTab("Dashboard");
+        showToast(`✓ Imported ${imported.length} members from your file`);
+      } catch {
+        showToast("Couldn't read that CSV — make sure it's a comma-separated export");
+      }
+    };
+    reader.readAsText(file);
+    e.target.value = "";             // let the same file be re-imported
+  }
+
+  function resetToDemo() {
+    setMembers(initialMembers);
+    setUsingImported(false);
+    setSelected(null);
+    setAiResults({});
+    showToast("Restored the demo roster");
+  }
+
+  function downloadImportTemplate() {
+    downloadCSV("pulseretain-import-template.csv", SAMPLE_CSV_HEADERS, SAMPLE_CSV_ROWS);
   }
 
   async function markOutreach(member, ai, smsWasSent = false) {
@@ -581,7 +624,12 @@ export default function App() {
                 <div style={{ marginBottom: 28, display: "flex", flexDirection: "row", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 16 }}>
                   <div>
                     <h1 style={{ margin: 0, fontSize: 26, fontWeight: 700, color: "#1a1a2e" }}>Member Retention Dashboard</h1>
-                    <p style={{ margin: "4px 0 0", color: "#888", fontSize: 14 }}>Pulse Studio · {members.length} active members</p>
+                    <p style={{ margin: "4px 0 0", color: "#888", fontSize: 14 }}>
+                      {usingImported ? "Your imported roster" : "Pulse Studio"} · {members.length} active members
+                      {usingImported && (
+                        <button onClick={resetToDemo} style={{ marginLeft: 10, background: "none", border: "none", color: "#185fa5", fontSize: 12, cursor: "pointer", textDecoration: "underline", padding: 0 }}>↺ reset to demo</button>
+                      )}
+                    </p>
                   </div>
                   <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
                     {/* Search */}
@@ -628,6 +676,25 @@ export default function App() {
                       aria-label="Export member list as CSV"
                       style={{ background: "#fff", color: "#1a1a2e", border: "1px solid #ddd", borderRadius: 10, padding: "10px 16px", fontSize: 13, fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap" }}
                     >⬇ Export CSV</button>
+                    {/* Import a real member roster (CSV) */}
+                    <input
+                      ref={importInputRef}
+                      type="file"
+                      accept=".csv,text/csv"
+                      onChange={handleImportFile}
+                      style={{ display: "none" }}
+                      aria-hidden="true"
+                    />
+                    <button
+                      onClick={() => importInputRef.current && importInputRef.current.click()}
+                      aria-label="Import your gym's members from a CSV file"
+                      style={{ background: "#1a1a2e", color: "#fff", border: "none", borderRadius: 10, padding: "10px 16px", fontSize: 13, fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap" }}
+                    >⬆ Import Members</button>
+                    <button
+                      onClick={downloadImportTemplate}
+                      aria-label="Download a CSV import template"
+                      style={{ background: "none", color: "#888", border: "none", fontSize: 12, cursor: "pointer", textDecoration: "underline", whiteSpace: "nowrap" }}
+                    >template</button>
                   </div>
                 </div>
 
