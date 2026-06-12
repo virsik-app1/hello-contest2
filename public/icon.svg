@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <rect width="512" height="512" rx="112" fill="#1a1a2e"/>
+  <!-- pulse line -->
+  <path d="M64 268 H170 L208 196 L268 332 L312 268 H372"
+        fill="none" stroke="#e74c3c" stroke-width="22"
+        stroke-linecap="round" stroke-linejoin="round"/>
+  <!-- lightning bolt -->
+  <path d="M300 132 L236 290 H300 L276 392 L392 226 H320 L356 132 Z"
+        fill="#e74c3c"/>
+</svg>

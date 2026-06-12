@@ -1,0 +1,8 @@
+{
+  "appId": "com.pulseretain.app",
+  "appName": "PulseRetain",
+  "webDir": "build",
+  "server": {
+    "androidScheme": "https"
+  }
+}

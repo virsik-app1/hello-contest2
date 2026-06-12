@@ -10,6 +10,25 @@ import { useState, useMemo, useEffect, useRef } from "react";
 
 Amplify.configure(awsConfig);
 
+// ─── Responsive helper ────────────────────────────────────────────────────────
+// The app is entirely inline-styled (no CSS media queries), so we detect a phone
+// viewport in JS and switch layouts. ~640px catches phones in portrait.
+function useIsMobile(breakpoint = 640) {
+  const query = `(max-width: ${breakpoint}px)`;
+  const [isMobile, setIsMobile] = useState(
+    typeof window !== "undefined" && window.matchMedia ? window.matchMedia(query).matches : false
+  );
+  useEffect(() => {
+    if (typeof window === "undefined" || !window.matchMedia) return;
+    const mq = window.matchMedia(query);
+    const onChange = (e) => setIsMobile(e.matches);
+    mq.addEventListener ? mq.addEventListener("change", onChange) : mq.addListener(onChange);
+    setIsMobile(mq.matches);
+    return () => { mq.removeEventListener ? mq.removeEventListener("change", onChange) : mq.removeListener(onChange); };
+  }, [query]);
+  return isMobile;
+}
+
 // ─── Authenticated API call ───────────────────────────────────────────────────
 // Every request to the Lambda carries the signed-in user's Cognito token, so the
 // backend can reject anyone who isn't logged in. Keys never touch the browser.
@@ -206,6 +225,7 @@ const reasonMeta = {
 };
 
 export default function App() {
+  const isMobile = useIsMobile();
   const [members, setMembers]         = useState(initialMembers);
   const [usingImported, setUsingImported] = useState(false);
   const importInputRef                = useRef(null);
@@ -651,16 +671,22 @@ export default function App() {
           )}
 
           {/* ── Header ── */}
-          <div style={{ background: "#1a1a2e", padding: "0 32px", display: "flex", alignItems: "center", justifyContent: "space-between", height: 56, position: "sticky", top: 0, zIndex: 100 }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-              <div style={{ width: 28, height: 28, borderRadius: 6, background: "linear-gradient(135deg,#e74c3c,#c0392b)", display: "flex", alignItems: "center", justifyContent: "center" }}>
-                <span style={{ color: "#fff", fontSize: 14 }}>⚡</span>
+          <div style={{ background: "#1a1a2e", padding: isMobile ? "8px 12px" : "0 32px", display: "flex", flexDirection: isMobile ? "column" : "row", alignItems: "center", justifyContent: "space-between", gap: isMobile ? 8 : 0, height: isMobile ? "auto" : 56, position: "sticky", top: 0, zIndex: 100 }}>
+            {/* Logo (+ sign-out on mobile's top row) */}
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", width: isMobile ? "100%" : "auto", gap: 10 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                <div style={{ width: 28, height: 28, borderRadius: 6, background: "linear-gradient(135deg,#e74c3c,#c0392b)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                  <span style={{ color: "#fff", fontSize: 14 }}>⚡</span>
+                </div>
+                <span style={{ color: "#fff", fontWeight: 700, fontSize: 16, letterSpacing: 0.5 }}>PulseRetain</span>
               </div>
-              <span style={{ color: "#fff", fontWeight: 700, fontSize: 16, letterSpacing: 0.5 }}>PulseRetain</span>
+              {isMobile && (
+                <button onClick={signOut} style={{ background: "transparent", border: "1px solid #444", color: "#ccc", padding: "5px 12px", borderRadius: 6, cursor: "pointer", fontSize: 12 }}>Sign out</button>
+              )}
             </div>
 
-            {/* ── Nav tabs ── */}
-            <div style={{ display: "flex", gap: 4 }}>
+            {/* ── Nav tabs (horizontally scrollable on mobile) ── */}
+            <div style={{ display: "flex", gap: 4, ...(isMobile ? { width: "100%", overflowX: "auto", WebkitOverflowScrolling: "touch", paddingBottom: 2 } : {}) }}>
               {TABS.map(tab => (
                 <button
                   key={tab}
@@ -670,16 +696,18 @@ export default function App() {
                     border: "none", color: activeTab === tab ? "#e74c3c" : "#aaa",
                     padding: "6px 16px", borderRadius: 6, cursor: "pointer",
                     fontSize: 13, fontWeight: activeTab === tab ? 700 : 400,
-                    transition: "all 0.15s",
+                    transition: "all 0.15s", whiteSpace: "nowrap", flexShrink: 0,
                   }}
                 >{tab}</button>
               ))}
             </div>
 
-            <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
-              <span style={{ color: "#aaa", fontSize: 13 }}>{user?.signInDetails?.loginId}</span>
-              <button onClick={signOut} style={{ background: "transparent", border: "1px solid #444", color: "#ccc", padding: "5px 14px", borderRadius: 6, cursor: "pointer", fontSize: 12 }}>Sign out</button>
-            </div>
+            {!isMobile && (
+              <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
+                <span style={{ color: "#aaa", fontSize: 13 }}>{user?.signInDetails?.loginId}</span>
+                <button onClick={signOut} style={{ background: "transparent", border: "1px solid #444", color: "#ccc", padding: "5px 14px", borderRadius: 6, cursor: "pointer", fontSize: 12 }}>Sign out</button>
+              </div>
+            )}
           </div>
 
           {/* ── Toast ── */}
@@ -689,7 +717,7 @@ export default function App() {
             </div>
           )}
 
-          <div style={{ maxWidth: 1100, margin: "0 auto", padding: "32px 24px" }}>
+          <div style={{ maxWidth: 1100, margin: "0 auto", padding: isMobile ? "18px 12px" : "32px 24px" }}>
 
             {/* ════════════════════════════════════════════════════════════
                 TAB: DASHBOARD
@@ -840,8 +868,8 @@ export default function App() {
                     </span>
                   </div>
 
-                  {/* Table header */}
-                  <div style={{ display: "grid", gridTemplateColumns: "2fr 1.5fr 1fr 1fr 1.2fr 1.5fr 1fr", padding: "10px 24px", background: "#fafafa", borderBottom: "1px solid #f0f0f0" }}>
+                  {/* Table header (hidden on mobile — rows become cards) */}
+                  <div style={{ display: isMobile ? "none" : "grid", gridTemplateColumns: "2fr 1.5fr 1fr 1fr 1.2fr 1.5fr 1fr", padding: "10px 24px", background: "#fafafa", borderBottom: "1px solid #f0f0f0" }}>
                     {["Member","Plan","Last Visit","Usual Schedule","Risk Score","Status","Actions"].map((h, i) => (
                       <span key={i} style={{ fontSize: 11, fontWeight: 600, color: "#aaa", textTransform: "uppercase", letterSpacing: 0.5 }}>{h}</span>
                     ))}
@@ -863,11 +891,50 @@ export default function App() {
 
                     return (
                       <div key={m.id}>
-                        {/* Row */}
+                        {/* Row — desktop table columns, or a stacked card on mobile */}
                         <div
                           onClick={() => setSelected(isSelected ? null : m.id)}
-                          style={{ display: "grid", gridTemplateColumns: "2fr 1.5fr 1fr 1fr 1.2fr 1.5fr 1fr", padding: "14px 24px", borderBottom: "1px solid #f7f7f7", cursor: "pointer", background: isSelected ? "#fafbff" : "#fff", transition: "background 0.15s" }}
+                          style={isMobile
+                            ? { padding: "14px 16px", borderBottom: "1px solid #f7f7f7", cursor: "pointer", background: isSelected ? "#fafbff" : "#fff" }
+                            : { display: "grid", gridTemplateColumns: "2fr 1.5fr 1fr 1fr 1.2fr 1.5fr 1fr", padding: "14px 24px", borderBottom: "1px solid #f7f7f7", cursor: "pointer", background: isSelected ? "#fafbff" : "#fff", transition: "background 0.15s" }}
                         >
+                          {isMobile ? (
+                            <>
+                              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                                <div style={{ width: 34, height: 34, borderRadius: "50%", background: rc.bg, color: rc.color, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, fontWeight: 700, flexShrink: 0, border: `1.5px solid ${rc.border}` }}>{m.initials}</div>
+                                <div style={{ flex: 1, minWidth: 0 }}>
+                                  <span style={{ fontSize: 14, fontWeight: 600, color: "#1a1a2e", display: "block" }}>{m.name}</span>
+                                  {ai && !ai.error && <span style={{ fontSize: 11, color: "#27ae60", fontWeight: 600 }}>✓ AI analyzed</span>}
+                                  {ai && ai.error && <span style={{ fontSize: 11, color: "#c0392b", fontWeight: 600 }}>⚠ analysis failed</span>}
+                                  {isLoading && <span style={{ fontSize: 11, color: "#f39c12" }}>⏳ analyzing...</span>}
+                                  {logged && <span style={{ fontSize: 11, color: "#185fa5", fontWeight: 600 }}>📨 outreach sent</span>}
+                                  {scheduled && <span style={{ fontSize: 11, color: "#8e44ad" }}> · ⏰ follow-up scheduled</span>}
+                                </div>
+                                <span style={{ background: rc.bg, color: rc.color, fontSize: 11, fontWeight: 600, padding: "3px 10px", borderRadius: 20, border: `1px solid ${rc.border}`, flexShrink: 0 }}>{rc.label}</span>
+                              </div>
+                              <div style={{ fontSize: 12, color: "#888", marginTop: 8, display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+                                <span style={{ color: "#555" }}>{m.plan}</span><span>·</span>
+                                <span style={{ color: effRisk === "high" ? "#c0392b" : "#555", fontWeight: effRisk === "high" ? 600 : 400 }}>{m.lastVisit}</span><span>·</span>
+                                <span>{m.usualVisits}</span>
+                              </div>
+                              <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 10 }}>
+                                <div style={{ flex: 1, height: 6, background: "#f0f0f0", borderRadius: 3, overflow: "hidden" }}>
+                                  <div style={{ width: `${ai && !ai.error ? ai.score : m.score}%`, height: "100%", background: rc.bar, borderRadius: 3, transition: "width 0.6s ease" }} />
+                                </div>
+                                <span style={{ fontSize: 12, fontWeight: 600, color: rc.color, minWidth: 28 }}>{ai && !ai.error ? ai.score : m.score}</span>
+                              </div>
+                              <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 10, flexWrap: "wrap" }} onClick={e => e.stopPropagation()}>
+                                {m.risk === "high" && !ai && !isLoading && (
+                                  <button onClick={e => analyzeOne(m, e)} style={{ fontSize: 11, background: "#fff1f1", border: "1px solid #fbc9c9", color: "#c0392b", borderRadius: 6, padding: "5px 12px", cursor: "pointer", fontWeight: 600 }}>Analyze</button>
+                                )}
+                                {ai && !ai.error && !logged && (
+                                  <button onClick={() => markOutreach(m, ai)} style={{ fontSize: 11, background: "#e8f4fd", border: "1px solid #b3d9f5", color: "#185fa5", borderRadius: 6, padding: "5px 12px", cursor: "pointer", fontWeight: 600 }}>Log Send</button>
+                                )}
+                                <button onClick={() => setModalMember(m)} style={{ fontSize: 11, background: "#f5f5f5", border: "1px solid #ddd", color: "#555", borderRadius: 6, padding: "5px 12px", cursor: "pointer" }}>View</button>
+                              </div>
+                            </>
+                          ) : (
+                          <>
                           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                             <div style={{ width: 34, height: 34, borderRadius: "50%", background: rc.bg, color: rc.color, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, fontWeight: 700, flexShrink: 0, border: `1.5px solid ${rc.border}` }}>{m.initials}</div>
                             <div>
@@ -907,6 +974,8 @@ export default function App() {
                               View
                             </button>
                           </div>
+                          </>
+                          )}
                         </div>
 
                         {/* Expanded row */}
@@ -1090,7 +1159,7 @@ export default function App() {
                   </div>
                 ) : (
                   <div style={{ background: "#fff", borderRadius: 14, boxShadow: "0 1px 4px rgba(0,0,0,0.07)", overflow: "hidden" }}>
-                    <div style={{ display: "grid", gridTemplateColumns: "1.5fr 1.5fr 1fr 2fr 1.2fr", padding: "10px 24px", background: "#fafafa", borderBottom: "1px solid #f0f0f0" }}>
+                    <div style={{ display: isMobile ? "none" : "grid", gridTemplateColumns: "1.5fr 1.5fr 1fr 2fr 1.2fr", padding: "10px 24px", background: "#fafafa", borderBottom: "1px solid #f0f0f0" }}>
                       {["Member","Plan","Sent At","Message Preview","Outcome"].map((h, i) => (
                         <span key={i} style={{ fontSize: 11, fontWeight: 600, color: "#aaa", textTransform: "uppercase", letterSpacing: 0.5 }}>{h}</span>
                       ))}
@@ -1104,7 +1173,9 @@ export default function App() {
                       };
                       const sc = statusColors[log.status] || statusColors.sent;
                       return (
-                        <div key={log.id} style={{ display: "grid", gridTemplateColumns: "1.5fr 1.5fr 1fr 2fr 1.2fr", padding: "14px 24px", borderBottom: "1px solid #f7f7f7", alignItems: "start" }}>
+                        <div key={log.id} style={isMobile
+                          ? { display: "flex", flexDirection: "column", gap: 6, padding: "14px 16px", borderBottom: "1px solid #f7f7f7" }
+                          : { display: "grid", gridTemplateColumns: "1.5fr 1.5fr 1fr 2fr 1.2fr", padding: "14px 24px", borderBottom: "1px solid #f7f7f7", alignItems: "start" }}>
                           <span style={{ fontSize: 13, fontWeight: 600, color: "#1a1a2e" }}>{log.memberName}</span>
                           <span style={{ fontSize: 12, color: "#555" }}>{log.plan} · ${log.value}/mo</span>
                           <span style={{ fontSize: 11, color: "#aaa" }}>{log.sentAt}</span>
@@ -1160,7 +1231,7 @@ export default function App() {
                   ))}
                 </div>
 
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20 }}>
+                <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: 20 }}>
                   {/* Risk breakdown */}
                   <div style={{ background: "#fff", borderRadius: 14, boxShadow: "0 1px 4px rgba(0,0,0,0.07)", padding: "20px 24px" }}>
                     <h2 style={{ margin: "0 0 16px", fontSize: 15, fontWeight: 700, color: "#1a1a2e" }}>Risk Distribution</h2>
@@ -1209,7 +1280,7 @@ export default function App() {
                     {outreachLog.length === 0 ? (
                       <p style={{ fontSize: 13, color: "#aaa" }}>No outreach data yet. Go to Dashboard, analyze members, log some messages, and update their status in the Outreach tab.</p>
                     ) : (
-                      <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 14 }}>
+                      <div style={{ display: "grid", gridTemplateColumns: isMobile ? "repeat(2, 1fr)" : "repeat(4, 1fr)", gap: 14 }}>
                         {[
                           { label: "Sent",        count: outreachLog.length, color: "#b7770d", bg: "#fffbf0" },
                           { label: "Responded",   count: outreachLog.filter(o=>["responded","recovered"].includes(o.status)).length, color: "#185fa5", bg: "#e8f4fd" },
@@ -1327,7 +1398,7 @@ export default function App() {
                         ))}
                       </div>
 
-                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20 }}>
+                      <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: 20 }}>
                         {/* Where members are going */}
                         <div style={{ background: "#fff", borderRadius: 14, boxShadow: "0 1px 4px rgba(0,0,0,0.07)", padding: "20px 24px" }}>
                           <h2 style={{ margin: "0 0 4px", fontSize: 15, fontWeight: 700, color: "#1a1a2e" }}>🎯 Where members are going</h2>
@@ -1450,7 +1521,7 @@ export default function App() {
 
                   {dataTab === "single" && (
                     <div>
-                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                      <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: 10 }}>
                         {addFields.map(f => (
                           <div key={f.key} style={{ gridColumn: f.full ? "1 / -1" : "auto" }}>
                             <label style={{ display: "block", fontSize: 11, fontWeight: 600, color: "#888", marginBottom: 3 }}>{f.label}</label>

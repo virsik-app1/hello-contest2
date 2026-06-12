@@ -1,11 +1,18 @@
 {
-  "short_name": "React App",
-  "name": "Create React App Sample",
+  "short_name": "PulseRetain",
+  "name": "PulseRetain — Member Retention",
+  "description": "AI-powered member churn prediction and win-back outreach for fitness studios.",
   "icons": [
     {
       "src": "favicon.ico",
       "sizes": "64x64 32x32 24x24 16x16",
       "type": "image/x-icon"
+    },
+    {
+      "src": "icon.svg",
+      "type": "image/svg+xml",
+      "sizes": "any",
+      "purpose": "any maskable"
     },
     {
       "src": "logo192.png",
@@ -19,7 +26,9 @@
     }
   ],
   "start_url": ".",
+  "scope": ".",
   "display": "standalone",
-  "theme_color": "#000000",
-  "background_color": "#ffffff"
+  "orientation": "portrait",
+  "theme_color": "#1a1a2e",
+  "background_color": "#1a1a2e"
 }
