@@ -1045,8 +1045,10 @@ export default function App() {
             {activeTab === "Competitors" && (() => {
               const reasons = intel?.reasons || {};
               const competitors = intel?.competitors || [];
-              const lostCount = reasons.competitor || 0;
-              const lostRev = intel?.lostToCompetitorsRevenue || 0;
+              // Headline numbers derive straight from the leaderboard, so
+              // "members lost to competitors" always matches the gyms shown.
+              const lostCount = competitors.reduce((a, c) => a + c.members, 0);
+              const lostRev = competitors.reduce((a, c) => a + (c.monthlyValue || 0), 0);
               const reasonsTotal = Object.values(reasons).reduce((a, b) => a + b, 0);
               const maxMembers = Math.max(1, ...competitors.map(c => c.members));
               return (
