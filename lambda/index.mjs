@@ -303,7 +303,7 @@ async function saveConversation(memberId, memberName, turns, meta = {}) {
 async function saveLead(lead) {
   const leadId = String(Date.now());
   const item = {
-    leadId,
+    leadID: leadId,   // table primary key is "leadID" (capital ID), like the outreach table
     name:    lead.name    || "",
     email:   lead.email   || "",
     gym:     lead.gym     || "",
