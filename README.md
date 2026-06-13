@@ -1,49 +1,56 @@
 # PulseRetain
 
-**AI-powered member churn prediction and automated retention outreach for fitness studios and gyms.**
+**The AI retention concierge for fitness studios — it spots the members about to quit, writes each one a personal win-back text, handles their reply, and tells the owner what's driving churn.**
 
-PulseRetain spots the members who are about to quietly cancel, has Claude write each one a personalized win-back text, sends it, and tracks whether it worked — so a studio owner stops losing members they never knew were slipping away.
+Most churn tools stop at a *prediction*. PulseRetain starts there: it generates the outreach, holds the two-way conversation, and turns every reply into competitive and operational intelligence.
 
 🔗 **Live app:** https://main.d2yk3ai4m6puu9.amplifyapp.com (behind login)
 🌐 **Marketing site:** https://main.deghc4fxl89sq.amplifyapp.com
 
-> Built for the "How crazy can you get?" AI Vibe Coding Competition. Target industry: SIC 7997 (membership sports & recreation clubs).
+> Built for the AI Vibe Coding Competition. Target industry: SIC 7997 (membership sports & recreation clubs).
 
 ---
 
 ## The problem
 
-Most gyms don't notice a member is slipping until they've already cancelled. Roughly two-thirds of members who quit do so quietly, with no complaint and no warning, and it takes staff over a week on average to realize a regular has stopped showing up. By then the member is gone — and it costs about five times more to win a new member than to keep an existing one.
+Most gyms don't notice a member is slipping until they've already cancelled. Research on membership businesses suggests roughly two-thirds of members who quit do so quietly — no complaint, no notice — and it often takes staff over a week to realize a regular has stopped showing up. By then they're gone, and it costs about **5× more** to win a new member than to keep an existing one.
 
-## The solution
+## What it does
 
-PulseRetain is a member-intelligence dashboard that:
+PulseRetain runs a retention loop — **predict → personalize → converse → learn:**
 
-1. **Scores churn risk** for every member from behavioral signals (recency of last visit, usual schedule, tenure, missed payments, upcoming bookings).
-2. **Generates a personalized win-back message** with Claude — tuned to each member's specific situation, under 160 characters, ready to send as a text.
-3. **Sends it** by SMS (via Twilio) and **logs the outreach** to a database.
-4. **Tracks the outcome** — responded, recovered, or no reply — and rolls it up into revenue-saved analytics.
+1. **Predict** — scores every member's churn risk from behavioral signals (visit recency, usual schedule, tenure, missed payments, upcoming bookings).
+2. **Personalize** — Claude writes each at-risk member a win-back text tuned to their situation (not a template), with a suggested offer and follow-up timing.
+3. **Converse** — when a member replies, Claude drafts the studio's response (warm, on-brand, with safety guardrails). The owner taps send. *No competitor handles the reply.*
+4. **Learn** — it aggregates *why* and *where* members leave into a **Retention Strategist** (root-cause findings + fixes) and **Competitive Intelligence** (which gyms are pulling members) — consent-based, from conversation, never location tracking.
 
-## AI usage
+### Feature highlights
 
-The intelligent core is a call to **Claude (`claude-haiku-4-5`)** routed through a secure AWS Lambda. For each member, Claude receives the member's signals and returns a strict JSON object:
+| Area | What it does |
+|------|--------------|
+| **Dashboard + "Today's Priorities"** | Opens like a to-do list — the 3 members to win back today, ranked by revenue at risk, one tap to send. |
+| **AI churn analysis** | Per-member risk score, plain-English reason, generated SMS, offer, follow-up cadence. |
+| **Conversational reply agent** | Drafts the studio's reply to a member's text; fixed offer menu + crisis/minors safety + prompt-injection defense, all server-side. |
+| **Retention Strategist** | Turns the data into business insight: "new members are leaking," "your weekend slot is bleeding," "F45 is your top threat" — each with a fix. |
+| **Competitive Intelligence** | A leaderboard of where members go when they leave, and the revenue at risk to each competitor. |
+| **Bring your own data** | Import a real member roster by CSV (auto-detects messy export headers), paste a list, or add members by hand. Parsed in-browser. |
+| **Mobile / installable** | A responsive, installable PWA — add to the home screen, full-screen, stays logged in. |
+| **Outreach log + analytics** | Tracks sent / responded / recovered / no-reply and rolls it up into revenue-saved figures. |
+
+## How AI is used
+
+The intelligence is **Anthropic Claude — Haiku 4.5** (`claude-haiku-4-5-20251001`), routed through a secure AWS Lambda so no API key ever touches the browser.
+
+- **Churn analysis** (`analyze`): the member's signals go to Claude, which returns strict JSON — one call doing three jobs at once: **prediction** (risk score), **explanation** (the reason), and **generation** (the personalized SMS + offer + follow-up window):
 
 ```json
-{
-  "riskLevel": "high",
-  "score": 85,
-  "reason": "One-sentence churn explanation",
-  "message": "Personalized SMS under 160 characters",
-  "followUpDays": 3,
-  "offerType": "class_credit"
-}
+{ "riskLevel": "high", "score": 85, "reason": "One-sentence churn explanation",
+  "message": "Personalized SMS under 160 characters", "followUpDays": 3, "offerType": "class_credit" }
 ```
 
-This single call does three AI jobs at once: **prediction** (risk score), **explanation** (the reason), and **generation** (the personalized message + recommended offer and follow-up cadence). Haiku was chosen for its speed and low cost, which keeps the per-member analysis essentially free at this scale.
+- **Conversational reply** (`draft_reply`): a server-side system prompt teaches Claude to reply as the studio owner — a fixed offer menu it can't deviate from, an objection playbook, a crisis-safety branch, and defenses against prompt injection. It also extracts the member's stated reason for leaving + any competitor named, which powers the Strategist and Competitive Intelligence views.
 
-**No API keys ever touch the browser.** The frontend only knows a Lambda URL; the Claude and Twilio credentials live server-side in the Lambda's environment.
-
----
+Haiku 4.5 was chosen for sub-second responses and negligible per-member cost. **All credentials (Claude, Twilio) live server-side in the Lambda — never in the frontend or this repo.**
 
 ## Architecture
 
@@ -52,94 +59,88 @@ This single call does three AI jobs at once: **prediction** (risk score), **expl
 │  React app (CRA)   │  HTTPS │  AWS Lambda Function URL  │
 │  on AWS Amplify    │ ─────► │  pulseretain-claude-proxy │
 │  • Cognito login   │        │  (single secure API)      │
-│  • Dashboard/      │        └─────────────┬────────────┘
-│    Outreach/       │            ┌──────────┼───────────┐
-│    Analytics       │            ▼          ▼           ▼
-└────────────────────┘      ┌─────────┐ ┌────────┐ ┌─────────┐
-                            │ Claude  │ │ Twilio │ │DynamoDB │
-                            │  API    │ │  SMS   │ │ 3 tables│
+│  • Dashboard /     │        └─────────────┬────────────┘
+│    Strategist /    │            ┌──────────┼───────────┐
+│    Outreach /      │            ▼          ▼           ▼
+│    Analytics /     │      ┌─────────┐ ┌────────┐ ┌─────────┐
+│    Competitors     │      │ Claude  │ │ Twilio │ │DynamoDB │
+└────────────────────┘      │ Haiku   │ │  SMS   │ │ 3 tables│
                             └─────────┘ └────────┘ └─────────┘
 ```
 
 | Layer | Technology |
 |-------|-----------|
-| Frontend | React (Create React App), deployed on **AWS Amplify** (CI/CD from GitHub `main`) |
-| Auth | **AWS Cognito** via `@aws-amplify/ui-react` Authenticator (hashed passwords, tokens, password reset) |
-| API | A single **AWS Lambda Function URL** — every call goes through it, so no secrets reach the client |
-| AI | **Anthropic Claude** (`claude-haiku-4-5`) |
-| SMS | **Twilio** |
-| Email | **AWS SES** |
+| Frontend | React (Create React App) + installable PWA, on **AWS Amplify** (CI/CD from GitHub `main`) |
+| Auth | **AWS Cognito** via `@aws-amplify/ui-react` (hashed passwords, tokens, password reset; the app is gated behind login) |
+| API | A single **AWS Lambda Function URL** — every call routes through it, so no secrets reach the client |
+| AI | **Anthropic Claude Haiku 4.5** (`claude-haiku-4-5-20251001`) |
+| SMS / Email | **Twilio** (SMS) · **Amazon SES** (lead notifications) |
 | Database | **Amazon DynamoDB** (3 tables) |
 | Region | `us-east-1` |
 
-The Lambda is a small router keyed on an `action` field. Supported actions:
+The Lambda is a small router keyed on an `action` field:
 
 | Action | Purpose |
 |--------|---------|
 | `analyze` | Run Claude churn analysis for a member |
+| `draft_reply` | Draft the studio's reply to a member's message (the conversational agent) |
+| `get_conversation` / `log_reply_sent` | Restore / append a member's reply thread |
+| `get_competitive_intel` | Aggregate where/why members leave |
 | `send_sms` | Send a win-back text via Twilio |
-| `load_data` | Restore saved AI results + outreach logs on app load |
-| `save_outreach` | Persist a logged outreach message |
-| `update_outreach_status` | Update an outreach's outcome (responded/recovered/no reply) |
+| `save_outreach` / `update_outreach_status` / `load_data` | Persist and restore outreach logs + saved analyses |
+| `submit_lead` | Save a marketing-site demo request + email the owner |
 
 ## Data model
 
-**Member** (demo roster is a realistic synthetic dataset of 10 members):
-
+**Member** (the demo roster is a realistic synthetic dataset; owners import their own via CSV):
 `id, name, plan, lastVisit, usualVisits, risk, score, value ($/mo), email, phone, joinedMonths, missedPayments, classesBooked`
 
-**DynamoDB tables (`us-east-1`):**
+**DynamoDB tables (`us-east-1`, string keys):**
+- `pulseretain-members` (`memberId`) — saved AI analyses.
+- `pulseretain-outreach` (`logID`) — outreach log + conversation threads (`conv-<memberId>`).
+- `pulseretain-leads` (`leadID`) — demo-request leads from the marketing site.
 
-- `pulseretain-members` — saved AI analysis results, keyed by `memberId`.
-- `pulseretain-outreach` — outreach log: `logId, memberId, memberName, plan, value, message, sentAt, status, followUpDays`.
-- `pulseretain-leads` — demo-request leads captured from the marketing site.
-
-**PII handling:** member name, email, and phone are treated as PII. They are sent only to the Lambda over HTTPS for message delivery and are never placed in URLs or client-side logs. (The demo roster uses synthetic contact details.)
-
----
+**PII handling:** member name, email, and phone are treated as PII — sent only to the Lambda over HTTPS, never placed in URLs or client-side logs. The demo roster uses synthetic contacts.
 
 ## Running locally
 
 ```bash
 npm install
-npm start          # opens http://localhost:3000
-```
-
-The app needs no `.env` to run — the Cognito config lives in `src/aws-config.js` and the Lambda URL is set in `src/App.js`. Server-side secrets (Claude key, Twilio credentials) are configured in the Lambda's environment, not in this repo.
-
-```bash
+npm start          # http://localhost:3000
 npm run build      # production build (what Amplify deploys)
+npm test           # unit tests for the pure logic modules
 ```
+
+No `.env` is needed to run the frontend — Cognito config is in `src/aws-config.js` and the Lambda URL is in `src/App.js`. Server-side secrets are configured in the Lambda's environment (see `.env.example` for the variable names).
 
 ## Deployment
 
-Amplify is connected to this repo's `main` branch. **Pushing to `main` automatically triggers a build and deploy** — there is no manual upload step.
+Amplify watches `main`. **Pushing to `main` auto-builds and deploys** (~3–5 min) — no manual upload. The Lambda is deployed separately (its source of truth is `lambda/index.mjs`).
 
-```bash
-git add -A
-git commit -m "your message"
-git push           # Amplify rebuilds and the live URL updates in ~2-3 min
-```
+## Security & honesty notes
 
-## Security notes
-
-- No API keys in the frontend or in git — all secrets are server-side in the Lambda.
-- `.env` is git-ignored.
-- Auth is real (Cognito): hashed passwords, session tokens, working sign-out and password reset.
+- **No secrets in the frontend or in git history** — Claude and Twilio credentials live only in the Lambda's server-side environment; `.env` is git-ignored.
+- The app is **gated behind Cognito login**.
+- The member roster is **synthetic** for the demo; CSV import lets an owner run it on their real members. Live gym-platform integrations (Mindbody / Glofox) are on the roadmap.
 
 ## Project structure
 
 ```
 hello-contest/
 ├── src/
-│   ├── App.js          # entire app: dashboard, outreach, analytics, AI calls
-│   ├── aws-config.js   # Cognito user pool config (public client IDs)
-│   └── ...
-├── docs/               # one-pager, architecture, demo script, ethics & accessibility
-├── public/
+│   ├── App.js            # dashboard, strategist, outreach, analytics, competitors, AI calls, PWA
+│   ├── retention.js      # churn stats, risk derivation, "Today's Priorities" queue (tested)
+│   ├── importMembers.js  # CSV parsing + member mapping + risk scoring (tested)
+│   ├── strategist.js     # root-cause Retention Strategist engine (tested)
+│   ├── aws-config.js     # Cognito user pool config (public client IDs)
+│   └── *.test.js         # unit tests
+├── lambda/index.mjs      # the secure API (source of truth; deployed to AWS Lambda)
+├── public/               # manifest, service worker, branded icons (PWA)
+├── docs/                 # one-pager, architecture, demo script, ethics & accessibility
+├── sample-gym-roster.csv # 20-member demo roster for CSV import
 └── README.md
 ```
 
 ## License
 
-MIT
+MIT — see [LICENSE](LICENSE).

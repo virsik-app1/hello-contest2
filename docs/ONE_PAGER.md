@@ -1,6 +1,6 @@
 # PulseRetain — One-Page Summary
 
-**AI-powered member churn prediction & automated retention outreach for fitness studios**
+**The AI retention concierge for fitness studios — predict who's leaving, win them back, and handle the conversation.**
 Student: Carter Virsik · AI Vibe Coding Competition · Target industry: SIC 7997
 Live app: https://main.d2yk3ai4m6puu9.amplifyapp.com (behind login) · Repo: https://github.com/virsik-app1/hello-contest2
 
@@ -8,34 +8,45 @@ Live app: https://main.d2yk3ai4m6puu9.amplifyapp.com (behind login) · Repo: htt
 
 ### The problem
 
-Gyms and boutique studios bleed revenue through *silent churn*. About two-thirds of members who cancel never complain or give notice — they just quietly stop showing up, and staff typically don't notice for over a week. Because winning a new member costs roughly 5× more than keeping one, every member who fades out unnoticed is avoidable lost revenue. Owners have dashboards full of data but no system that watches for the early warning signs and acts on them.
+Gyms and boutique studios bleed revenue through *silent churn*. Research on membership businesses suggests about two-thirds of members who cancel never complain or give notice — they just quietly stop showing up, and staff often don't notice for over a week. Because winning a new member costs roughly 5× more than keeping one, every member who fades out unnoticed is avoidable lost revenue.
 
 ### The solution
 
-PulseRetain is a member-intelligence platform that turns raw membership data into retention action. For every member it predicts a churn-risk score, explains the risk in one sentence, and — for at-risk members — has Claude write a personalized win-back text matched to that member's history. The owner can send the message by SMS in one click, log it, and track whether the member responded and came back. A live analytics view rolls this up into revenue-at-risk and revenue-saved figures, so the tool's value is visible in dollars.
+PulseRetain runs a full retention loop — **predict → personalize → converse → learn:**
+
+- **Predict.** It scores every member's churn risk from behavioral signals (visit recency, schedule, tenure, missed payments, bookings) and opens like a to-do list — the few members to win back *today*, ranked by revenue at risk.
+- **Personalize.** Claude writes each at-risk member a win-back text tuned to their situation — with a suggested offer and follow-up timing.
+- **Converse.** When a member replies ("it's gotten too expensive"), Claude drafts the studio's response — warm, on-brand, offering a *pause* instead of a discount war. The owner taps send. **No competitor handles the reply.**
+- **Learn.** A **Retention Strategist** turns the data into business insight ("new members are leaking," "your weekend slot is bleeding," "F45 is your top threat") with a fix for each, and a **Competitive Intelligence** view shows where members go — learned from consent-based conversation, never location tracking.
+
+Owners can import their real roster by CSV, and the whole thing is an **installable mobile app** (add to home screen, full-screen, stays logged in).
 
 ### How AI is used
 
-The intelligence is a single call to **Claude (`claude-haiku-4-5`)**, routed through a secure AWS Lambda so no API key is ever exposed in the browser. Each member's behavioral signals — last visit, usual schedule, tenure, missed payments, upcoming bookings, current risk score — are sent to Claude, which returns a strict JSON object containing a risk level and score, a one-sentence churn reason, a personalized SMS under 160 characters, a recommended follow-up window, and a suggested retention offer. One call therefore performs three AI tasks at once: **prediction, explanation, and generation.** Haiku was chosen for sub-second responses and negligible cost at studio scale.
+The intelligence is **Anthropic Claude — Haiku 4.5** (`claude-haiku-4-5-20251001`), routed through a secure AWS Lambda so no API key is ever exposed in the browser. The core `analyze` call performs **three AI tasks at once** — prediction (risk score), explanation (a one-sentence reason), and generation (a personalized SMS + offer + follow-up window) — returning strict JSON that drives the UI. A second `draft_reply` call uses a server-side system prompt (a fixed offer menu, an objection playbook, and a crisis-safety branch) to hold the two-way conversation and to extract *why* members leave. Haiku was chosen for sub-second responses and negligible per-member cost.
+
+### Why it's different
+
+Emarsys is a $1,500–$10,000+/month enterprise marketing cloud built for Fortune-1000 retailers — not studios. The fitness churn tools (Keepme, Glofox, Gleantap, 1club) all *predict and fire a templated, one-way campaign.* A scoring model can rank a member; only a frontier LLM can **write a unique message, hold the reply, and explain the root cause.** PulseRetain is the studio-native, conversational, pay-when-it-works alternative.
 
 ### Key technical choices
 
-- **Single secure Lambda "proxy"** — the React frontend only knows a Lambda URL; Claude and Twilio credentials live server-side. This keeps secrets out of the browser and out of the public GitHub repo.
-- **Structured-JSON prompting** — Claude is instructed to return raw JSON only, which is parsed defensively, making the AI output reliable enough to drive UI.
-- **Serverless on AWS Free Tier** — Amplify (hosting + CI/CD from GitHub), Cognito (auth), Lambda, DynamoDB, SES, plus Twilio for SMS — chosen to keep running costs near zero while staying production-shaped.
-- **Cognito for real auth** — hashed passwords, tokens, password reset, and enforced login, rather than a cosmetic gate.
+- **Single secure Lambda "proxy"** — the React frontend only knows a Lambda URL; Claude and Twilio credentials live server-side, out of the browser and out of the public repo.
+- **Structured-JSON prompting**, parsed defensively, so AI output is reliable enough to drive the UI.
+- **Serverless on AWS** — Amplify (hosting + CI/CD), Cognito (auth), Lambda, DynamoDB, SES — plus Twilio for SMS, to keep running costs near zero.
+- **Installable PWA** — one codebase that works on the web and installs to a phone's home screen.
 
 ### What was learned
 
-- **"Works on my laptop" is not "deployed."** The biggest lesson was that Amplify deploys only what reaches GitHub's `main` branch — local progress that was never pushed left the public site showing an empty shell. Continuous deployment makes `git push` the real "publish" button.
-- **Secrets discipline matters and is easy to get wrong.** Keeping the Claude/Twilio keys server-side in the Lambda (never in the frontend or in `.env` committed to a public repo) is what makes the project safe to open-source.
-- **The browser and the cloud must agree.** A deployed frontend calling a backend introduces CORS and configuration concerns that simply don't exist on localhost.
-- **Verify, don't assume.** Checking the live network traffic — rather than trusting that a feature "should" work — was what revealed the real state of the app.
+- **"Works on my laptop" is not "deployed."** Amplify ships only what reaches GitHub's `main`; `git push` is the real publish button.
+- **Config bugs fail silently.** A one-letter key mismatch (`logId` vs the table's `logID`) meant data quietly never saved — a reminder to verify reads *and* writes, not just that an API returns success.
+- **Secrets discipline matters** — keeping keys server-side in the Lambda is what makes the project safe to open-source.
+- **Verify, don't assume** — inspecting live network traffic, not trusting that a feature "should" work, repeatedly revealed the true state of the app.
 
 ### Success criteria (and status)
 
 1. Predict a churn-risk score for every member — **done (live, via Claude).**
-2. Generate a personalized, ready-to-send message for each at-risk member — **done.**
-3. One-click outreach with persistent logging and outcome tracking — **done (DynamoDB).**
-4. Quantify impact in dollars (revenue at risk / saved) — **done (Analytics tab).**
-5. Publicly accessible, behind real authentication — **done (Amplify + Cognito).**
+2. Generate a personalized, ready-to-send win-back message — **done.**
+3. **Hold the two-way conversation** — draft the reply to a member's response — **done (the differentiator).**
+4. Explain *why* members leave and what to fix — **done (Retention Strategist + Competitive Intelligence).**
+5. Run on a real roster, on a phone, behind real auth — **done (CSV import, installable PWA, Cognito).**

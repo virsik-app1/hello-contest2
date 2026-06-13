@@ -46,7 +46,7 @@ This is the difference between handing someone your house key versus asking the 
 | Web hosting + CI/CD | **AWS Amplify** | Serves the React build; auto-deploys on every push to GitHub `main`. |
 | Authentication | **AWS Cognito** | User pool `us-east-1_aQyubZnZS`. Handles sign-up, login, hashed passwords, tokens, password reset. Rendered by the Amplify Authenticator component. |
 | API / backend | **AWS Lambda (Function URL)** | Single endpoint, routed by `action`. The only thing that talks to Claude, Twilio, and DynamoDB. |
-| AI | **Anthropic Claude `claude-haiku-4-5`** | Churn scoring + reasoning + message generation in one call. |
+| AI | **Anthropic Claude Haiku 4.5** (`claude-haiku-4-5-20251001`) | Churn scoring + reasoning + message generation in one call; conversational reply drafting. |
 | SMS | **Twilio** | Delivers the generated win-back text. |
 | Email | **AWS SES** | Email notifications / lead handling. |
 | Database | **Amazon DynamoDB** | Persists AI results, outreach logs, and marketing leads. |
