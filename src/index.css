@@ -11,3 +11,18 @@ code {
   font-family: source-code-pro, Menlo, Monaco, Consolas, 'Courier New',
     monospace;
 }
+
+/* Branded sign-in: let the navy gradient (.pulse-auth-bg) show behind the
+   Amplify Authenticator, and center the card vertically. */
+.pulse-auth-bg [data-amplify-authenticator] {
+  background: transparent;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 24px 16px;
+}
+.pulse-auth-bg [data-amplify-authenticator] [data-amplify-router] {
+  border-radius: 16px;
+}

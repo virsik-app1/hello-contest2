@@ -1,6 +1,6 @@
 import { Amplify } from "aws-amplify";
 import { fetchAuthSession } from "aws-amplify/auth";
-import { Authenticator, useAuthenticator } from "@aws-amplify/ui-react";
+import { Authenticator, useAuthenticator, ThemeProvider } from "@aws-amplify/ui-react";
 import "@aws-amplify/ui-react/styles.css";
 import { awsConfig } from "./aws-config";
 import { buildStats, deriveRisk, pickTodaysQueue } from "./retention";
@@ -257,6 +257,66 @@ const reasonMeta = {
   injury:     { label: "Injury / health",     color: "#185fa5", bg: "#e8f4fd" },
   moving:     { label: "Moving away",         color: "#1e7e45", bg: "#f0faf4" },
   other:      { label: "Other",               color: "#777",    bg: "#f4f4f4" },
+};
+
+// ─── Branded sign-in (custom Amplify Authenticator theme + hero) ──────────────
+const pulseTheme = {
+  name: "pulseretain",
+  tokens: {
+    colors: {
+      brand: {
+        primary: {
+          10: "#fff1f1", 20: "#fde0de", 40: "#f1948a", 60: "#ec7063",
+          80: "#e74c3c", 90: "#c0392b", 100: "#a93226",
+        },
+      },
+    },
+    components: {
+      authenticator: {
+        router: { borderWidth: "0", boxShadow: "0 18px 50px rgba(0,0,0,0.22)" },
+      },
+      button: {
+        primary: {
+          backgroundColor: "#e74c3c",
+          _hover:  { backgroundColor: "#c0392b" },
+          _focus:  { backgroundColor: "#c0392b" },
+          _active: { backgroundColor: "#a93226" },
+        },
+      },
+      tabs: {
+        item: {
+          color: "#888",
+          _active: { color: "#c0392b", borderColor: "#c0392b" },
+          _hover:  { color: "#c0392b" },
+        },
+      },
+    },
+  },
+};
+
+const authComponents = {
+  Header() {
+    return (
+      <div style={{ textAlign: "center", padding: "40px 20px 14px" }}>
+        <div style={{ display: "inline-flex", alignItems: "center", gap: 12, marginBottom: 16 }}>
+          <div style={{ width: 50, height: 50, borderRadius: 13, background: "linear-gradient(135deg,#e74c3c,#c0392b)", display: "flex", alignItems: "center", justifyContent: "center", boxShadow: "0 6px 20px rgba(231,76,60,0.5)" }}>
+            <span style={{ color: "#fff", fontSize: 27 }}>⚡</span>
+          </div>
+          <span style={{ color: "#fff", fontWeight: 700, fontSize: 31, letterSpacing: 0.5 }}>PulseRetain</span>
+        </div>
+        <p style={{ color: "#cfd0e8", fontSize: 15, margin: "0 auto", maxWidth: 370, lineHeight: 1.55 }}>
+          AI that spots the members about to quit — and writes the text that wins them back.
+        </p>
+      </div>
+    );
+  },
+  Footer() {
+    return (
+      <div style={{ textAlign: "center", padding: "18px 20px 40px" }}>
+        <p style={{ color: "#8a8ba8", fontSize: 12, margin: 0 }}>Member retention, on autopilot · built for fitness studios</p>
+      </div>
+    );
+  },
 };
 
 export default function App() {
@@ -700,7 +760,9 @@ export default function App() {
   // ══════════════════════════════════════════════════════════════════════════
   return (
     <>
-    <Authenticator>
+    <ThemeProvider theme={pulseTheme}>
+    <div className="pulse-auth-bg" style={{ minHeight: "100vh", background: "linear-gradient(165deg,#15152b 0%,#1a1a2e 45%,#262652 100%)" }}>
+    <Authenticator components={authComponents}>
       {({ signOut, user }) => (
         <div style={{ minHeight: "100vh", background: "#f5f6fa", fontFamily: "'Georgia', serif" }}>
 
@@ -1637,6 +1699,8 @@ export default function App() {
         </div>
       )}
     </Authenticator>
+    </div>
+    </ThemeProvider>
 
     {/* ── "Add to Home Screen" prompt (overlays login + app) ── */}
     {showInstall && (
