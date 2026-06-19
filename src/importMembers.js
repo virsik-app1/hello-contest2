@@ -50,6 +50,7 @@ const FIELD_ALIASES = {
   missedPayments:["missedpayments", "failedpayments", "declines", "missedpayment", "failedcharges"],
   classesBooked: ["classesbooked", "upcomingbookings", "bookings", "classesbookedahead", "upcoming", "reservations", "futurebookings"],
   schedule:      ["usualschedule", "schedule", "usualvisits", "typicalschedule", "preferreddays", "regularschedule"],
+  location:      ["location", "site", "club", "branch", "studio", "gym", "facility", "homeclub", "homelocation"],
 };
 
 function buildColumnMap(headers) {
@@ -153,6 +154,7 @@ export function mapRowsToMembers(rows, nowMs) {
       joinedMonths,
       missedPayments,
       classesBooked,
+      location: get(r, "location"),
     });
   }
   return members;
@@ -163,32 +165,32 @@ export function parseMembersCSV(text, nowMs) {
 }
 
 // A sample CSV owners can download to see the expected shape.
-export const SAMPLE_CSV_HEADERS = ["Name", "Email", "Phone", "Plan", "Monthly Value", "Last Visit", "Join Date", "Missed Payments", "Classes Booked", "Usual Schedule"];
+export const SAMPLE_CSV_HEADERS = ["Name", "Email", "Phone", "Plan", "Monthly Value", "Last Visit", "Join Date", "Missed Payments", "Classes Booked", "Usual Schedule", "Location"];
 export const SAMPLE_CSV_ROWS = [
-  ["Jamie Rivera", "jamie@email.com", "(704) 555-0101", "Unlimited Monthly", "79", "2026-06-02", "2024-09-15", "0", "2", "Mon & Wed"],
-  ["Alex Chen", "alex@email.com", "(704) 555-0102", "10-Class Pack", "49", "2026-05-20", "2025-11-01", "1", "0", "Weekends"],
+  ["Jamie Rivera", "jamie@email.com", "(704) 555-0101", "Unlimited Monthly", "79", "2026-06-02", "2024-09-15", "0", "2", "Mon & Wed", "Downtown"],
+  ["Alex Chen", "alex@email.com", "(704) 555-0102", "10-Class Pack", "49", "2026-05-20", "2025-11-01", "1", "0", "Weekends", "Northside"],
 ];
 
 // A realistic 20-member boutique-studio roster for one-click demo loading.
 // (Mirrors sample-gym-roster.csv in the repo root.)
-export const SAMPLE_GYM_CSV = `Name,Email,Phone,Plan,Monthly Value,Last Visit,Join Date,Missed Payments,Classes Booked,Usual Schedule
-Maria Gonzalez,maria.gonzalez@gmail.com,(704) 555-0142,Unlimited Monthly,159,2026-06-11,2022-03-14,0,3,Mon/Wed/Fri
-James Patterson,jpatterson@outlook.com,(980) 555-0188,Unlimited Monthly,159,2026-05-21,2023-08-02,1,0,Tue & Thu
-Aisha Khan,aisha.khan@gmail.com,(704) 555-0119,8-Class Pack,120,2026-06-09,2024-01-20,0,2,Weekends
-Tyler Brooks,tyler.brooks@yahoo.com,(980) 555-0233,Unlimited Monthly,159,2026-05-18,2026-04-02,2,0,Mon & Wed
-Sofia Romano,sofia.romano@icloud.com,(704) 555-0167,Annual (Monthly),129,2026-06-12,2021-06-01,0,4,Daily
-Marcus Lee,marcus.lee@gmail.com,(704) 555-0204,8-Class Pack,120,2026-06-04,2023-02-15,0,1,Tue/Thu
-Hannah Wright,hannah.wright@gmail.com,(980) 555-0151,Unlimited Monthly,159,2026-05-24,2024-09-09,0,0,Sat & Sun
-Derek Johnson,derek.j@outlook.com,(704) 555-0178,Student Monthly,89,2026-06-10,2025-09-01,0,2,Mon/Wed/Fri
-Priya Patel,priya.patel@gmail.com,(980) 555-0126,Unlimited Monthly,159,2026-06-02,2022-11-30,0,1,Tue & Thu
-Carlos Mendez,carlos.mendez@yahoo.com,(704) 555-0299,8-Class Pack,120,2026-05-15,2026-05-05,1,0,Weekends
-Emma Thompson,emma.thompson@gmail.com,(704) 555-0113,Unlimited Monthly,159,2026-06-11,2021-01-12,0,5,Daily
-Nina Volkov,nina.volkov@icloud.com,(980) 555-0244,Annual (Monthly),129,2026-06-05,2023-05-22,0,2,Mon/Wed
-Jamal Carter,jamal.carter@gmail.com,(704) 555-0190,Unlimited Monthly,159,2026-05-20,2024-07-18,2,0,Tue/Thu/Sat
-Olivia Nguyen,olivia.nguyen@gmail.com,(980) 555-0137,8-Class Pack,120,2026-06-08,2026-05-12,0,1,Fridays
-Ryan O'Brien,ryan.obrien@outlook.com,(704) 555-0155,Unlimited Monthly,159,2026-06-03,2022-08-08,0,2,Mon & Wed
-Fatima Al-Sayed,fatima.alsayed@gmail.com,(980) 555-0171,Student Monthly,89,2026-06-12,2025-10-14,0,3,Tue/Thu
-Greg Sullivan,greg.sullivan@yahoo.com,(704) 555-0182,Unlimited Monthly,159,2026-05-23,2023-12-01,1,0,Weekends
-Chloe Bennett,chloe.bennett@gmail.com,(980) 555-0148,8-Class Pack,120,2026-06-05,2024-04-27,0,1,Mon/Wed/Fri
-David Kim,david.kim@icloud.com,(704) 555-0163,Annual (Monthly),129,2026-06-09,2021-09-19,0,3,Tue & Thu
-Isabella Russo,isabella.russo@gmail.com,(980) 555-0215,Unlimited Monthly,159,2026-06-04,2026-04-20,0,0,Sat & Sun`;
+export const SAMPLE_GYM_CSV = `Name,Email,Phone,Plan,Monthly Value,Last Visit,Join Date,Missed Payments,Classes Booked,Usual Schedule,Location
+Maria Gonzalez,maria.gonzalez@gmail.com,(704) 555-0142,Unlimited Monthly,159,2026-06-11,2022-03-14,0,3,Mon/Wed/Fri,Downtown
+James Patterson,jpatterson@outlook.com,(980) 555-0188,Unlimited Monthly,159,2026-05-21,2023-08-02,1,0,Tue & Thu,Downtown
+Aisha Khan,aisha.khan@gmail.com,(704) 555-0119,8-Class Pack,120,2026-06-09,2024-01-20,0,2,Weekends,Northside
+Tyler Brooks,tyler.brooks@yahoo.com,(980) 555-0233,Unlimited Monthly,159,2026-05-18,2026-04-02,2,0,Mon & Wed,West End
+Sofia Romano,sofia.romano@icloud.com,(704) 555-0167,Annual (Monthly),129,2026-06-12,2021-06-01,0,4,Daily,Downtown
+Marcus Lee,marcus.lee@gmail.com,(704) 555-0204,8-Class Pack,120,2026-06-04,2023-02-15,0,1,Tue/Thu,Northside
+Hannah Wright,hannah.wright@gmail.com,(980) 555-0151,Unlimited Monthly,159,2026-05-24,2024-09-09,0,0,Sat & Sun,West End
+Derek Johnson,derek.j@outlook.com,(704) 555-0178,Student Monthly,89,2026-06-10,2025-09-01,0,2,Mon/Wed/Fri,Downtown
+Priya Patel,priya.patel@gmail.com,(980) 555-0126,Unlimited Monthly,159,2026-06-02,2022-11-30,0,1,Tue & Thu,Northside
+Carlos Mendez,carlos.mendez@yahoo.com,(704) 555-0299,8-Class Pack,120,2026-05-15,2026-05-05,1,0,Weekends,West End
+Emma Thompson,emma.thompson@gmail.com,(704) 555-0113,Unlimited Monthly,159,2026-06-11,2021-01-12,0,5,Daily,Downtown
+Nina Volkov,nina.volkov@icloud.com,(980) 555-0244,Annual (Monthly),129,2026-06-05,2023-05-22,0,2,Mon/Wed,Northside
+Jamal Carter,jamal.carter@gmail.com,(704) 555-0190,Unlimited Monthly,159,2026-05-20,2024-07-18,2,0,Tue/Thu/Sat,West End
+Olivia Nguyen,olivia.nguyen@gmail.com,(980) 555-0137,8-Class Pack,120,2026-06-08,2026-05-12,0,1,Fridays,Downtown
+Ryan O'Brien,ryan.obrien@outlook.com,(704) 555-0155,Unlimited Monthly,159,2026-06-03,2022-08-08,0,2,Mon & Wed,Northside
+Fatima Al-Sayed,fatima.alsayed@gmail.com,(980) 555-0171,Student Monthly,89,2026-06-12,2025-10-14,0,3,Tue/Thu,West End
+Greg Sullivan,greg.sullivan@yahoo.com,(704) 555-0182,Unlimited Monthly,159,2026-05-23,2023-12-01,1,0,Weekends,Downtown
+Chloe Bennett,chloe.bennett@gmail.com,(980) 555-0148,8-Class Pack,120,2026-06-05,2024-04-27,0,1,Mon/Wed/Fri,Northside
+David Kim,david.kim@icloud.com,(704) 555-0163,Annual (Monthly),129,2026-06-09,2021-09-19,0,3,Tue & Thu,West End
+Isabella Russo,isabella.russo@gmail.com,(980) 555-0215,Unlimited Monthly,159,2026-06-04,2026-04-20,0,0,Sat & Sun,Downtown`;

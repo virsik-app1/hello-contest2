@@ -6,6 +6,7 @@ import { awsConfig } from "./aws-config";
 import { buildStats, deriveRisk, pickTodaysQueue } from "./retention";
 import { parseMembersCSV, SAMPLE_CSV_HEADERS, SAMPLE_CSV_ROWS, SAMPLE_GYM_CSV } from "./importMembers";
 import { computeInsights } from "./strategist";
+import { listLocations, filterByLocation, summarizeLocations, ALL_LOCATIONS } from "./locations";
 import { useState, useMemo, useEffect, useRef } from "react";
 
 Amplify.configure(awsConfig);
@@ -82,16 +83,16 @@ async function apiFetch(payload) {
 
 // ─── Member data ────────────────────────────────────────────────────────────
 const initialMembers = [
-  { id: 1,  name: "Sarah Reynolds",  initials: "SR", plan: "Unlimited Monthly", lastVisit: "9 days ago",  usualVisits: "Tue & Thu",      risk: "high",   score: 91, value: 79,  email: "sarah.r@email.com",  phone: "(704) 555-0192", joinedMonths: 14, missedPayments: 0, classesBooked: 2 },
-  { id: 2,  name: "Tom Mitchell",    initials: "TM", plan: "10-Class Pack",     lastVisit: "6 days ago",  usualVisits: "Every Saturday", risk: "high",   score: 78, value: 49,  email: "t.mitchell@email.com", phone: "(704) 555-0341", joinedMonths: 7,  missedPayments: 1, classesBooked: 1 },
-  { id: 3,  name: "Jessica Lane",    initials: "JL", plan: "Unlimited Monthly", lastVisit: "4 days ago",  usualVisits: "Mon, Wed, Fri",  risk: "medium", score: 54, value: 79,  email: "jlane@email.com",    phone: "(704) 555-0887", joinedMonths: 22, missedPayments: 0, classesBooked: 4 },
-  { id: 4,  name: "Marcus Webb",     initials: "MW", plan: "Unlimited Monthly", lastVisit: "3 days ago",  usualVisits: "Tue & Thu",      risk: "medium", score: 47, value: 79,  email: "m.webb@email.com",   phone: "(704) 555-0654", joinedMonths: 5,  missedPayments: 0, classesBooked: 3 },
-  { id: 5,  name: "Priya Nair",      initials: "PN", plan: "5-Class Pack",      lastVisit: "2 days ago",  usualVisits: "Fridays",        risk: "low",    score: 21, value: 29,  email: "p.nair@email.com",   phone: "(704) 555-0223", joinedMonths: 3,  missedPayments: 0, classesBooked: 6 },
-  { id: 6,  name: "Derek Collins",   initials: "DC", plan: "Unlimited Monthly", lastVisit: "1 day ago",   usualVisits: "Daily",          risk: "low",    score: 12, value: 79,  email: "d.collins@email.com", phone: "(704) 555-0119", joinedMonths: 36, missedPayments: 0, classesBooked: 8 },
-  { id: 7,  name: "Aisha Thompson",  initials: "AT", plan: "Unlimited Monthly", lastVisit: "Today",       usualVisits: "Mon & Wed",      risk: "low",    score: 8,  value: 79,  email: "a.thompson@email.com", phone: "(704) 555-0774", joinedMonths: 18, missedPayments: 0, classesBooked: 7 },
-  { id: 8,  name: "Ryan Foster",     initials: "RF", plan: "10-Class Pack",     lastVisit: "8 days ago",  usualVisits: "Weekends",       risk: "high",   score: 83, value: 49,  email: "r.foster@email.com", phone: "(704) 555-0562", joinedMonths: 9,  missedPayments: 2, classesBooked: 0 },
-  { id: 9,  name: "Camille Torres",  initials: "CT", plan: "Unlimited Monthly", lastVisit: "11 days ago", usualVisits: "Wed & Fri",      risk: "high",   score: 88, value: 79,  email: "c.torres@email.com", phone: "(704) 555-0338", joinedMonths: 11, missedPayments: 1, classesBooked: 0 },
-  { id: 10, name: "Jordan Kim",      initials: "JK", plan: "Unlimited Monthly", lastVisit: "5 days ago",  usualVisits: "Tue & Thu",      risk: "medium", score: 61, value: 79,  email: "j.kim@email.com",    phone: "(704) 555-0491", joinedMonths: 8,  missedPayments: 0, classesBooked: 2 },
+  { id: 1,  name: "Sarah Reynolds",  initials: "SR", plan: "Unlimited Monthly", lastVisit: "9 days ago",  usualVisits: "Tue & Thu",      risk: "high",   score: 91, value: 79,  email: "sarah.r@email.com",  phone: "(704) 555-0192", joinedMonths: 14, missedPayments: 0, classesBooked: 2, location: "Downtown" },
+  { id: 2,  name: "Tom Mitchell",    initials: "TM", plan: "10-Class Pack",     lastVisit: "6 days ago",  usualVisits: "Every Saturday", risk: "high",   score: 78, value: 49,  email: "t.mitchell@email.com", phone: "(704) 555-0341", joinedMonths: 7,  missedPayments: 1, classesBooked: 1, location: "Downtown" },
+  { id: 3,  name: "Jessica Lane",    initials: "JL", plan: "Unlimited Monthly", lastVisit: "4 days ago",  usualVisits: "Mon, Wed, Fri",  risk: "medium", score: 54, value: 79,  email: "jlane@email.com",    phone: "(704) 555-0887", joinedMonths: 22, missedPayments: 0, classesBooked: 4, location: "Downtown" },
+  { id: 4,  name: "Marcus Webb",     initials: "MW", plan: "Unlimited Monthly", lastVisit: "3 days ago",  usualVisits: "Tue & Thu",      risk: "medium", score: 47, value: 79,  email: "m.webb@email.com",   phone: "(704) 555-0654", joinedMonths: 5,  missedPayments: 0, classesBooked: 3, location: "Downtown" },
+  { id: 5,  name: "Priya Nair",      initials: "PN", plan: "5-Class Pack",      lastVisit: "2 days ago",  usualVisits: "Fridays",        risk: "low",    score: 21, value: 29,  email: "p.nair@email.com",   phone: "(704) 555-0223", joinedMonths: 3,  missedPayments: 0, classesBooked: 6, location: "Northside" },
+  { id: 6,  name: "Derek Collins",   initials: "DC", plan: "Unlimited Monthly", lastVisit: "1 day ago",   usualVisits: "Daily",          risk: "low",    score: 12, value: 79,  email: "d.collins@email.com", phone: "(704) 555-0119", joinedMonths: 36, missedPayments: 0, classesBooked: 8, location: "Northside" },
+  { id: 7,  name: "Aisha Thompson",  initials: "AT", plan: "Unlimited Monthly", lastVisit: "Today",       usualVisits: "Mon & Wed",      risk: "low",    score: 8,  value: 79,  email: "a.thompson@email.com", phone: "(704) 555-0774", joinedMonths: 18, missedPayments: 0, classesBooked: 7, location: "Northside" },
+  { id: 8,  name: "Ryan Foster",     initials: "RF", plan: "10-Class Pack",     lastVisit: "8 days ago",  usualVisits: "Weekends",       risk: "high",   score: 83, value: 49,  email: "r.foster@email.com", phone: "(704) 555-0562", joinedMonths: 9,  missedPayments: 2, classesBooked: 0, location: "West End" },
+  { id: 9,  name: "Camille Torres",  initials: "CT", plan: "Unlimited Monthly", lastVisit: "11 days ago", usualVisits: "Wed & Fri",      risk: "high",   score: 88, value: 79,  email: "c.torres@email.com", phone: "(704) 555-0338", joinedMonths: 11, missedPayments: 1, classesBooked: 0, location: "West End" },
+  { id: 10, name: "Jordan Kim",      initials: "JK", plan: "Unlimited Monthly", lastVisit: "5 days ago",  usualVisits: "Tue & Thu",      risk: "medium", score: 61, value: 79,  email: "j.kim@email.com",    phone: "(704) 555-0491", joinedMonths: 8,  missedPayments: 0, classesBooked: 2, location: "West End" },
 ];
 
 // ─── Risk config ─────────────────────────────────────────────────────────────
@@ -336,7 +337,7 @@ export default function App() {
   const [showData, setShowData]       = useState(false);    // "Add members" modal
   const [dataTab, setDataTab]         = useState("sample");  // sample | upload | paste | single
   const [pasteText, setPasteText]     = useState("");
-  const blankMember = { name: "", plan: "", value: "", lastVisit: "", joinDate: "", missedPayments: "", classesBooked: "", schedule: "", email: "", phone: "" };
+  const blankMember = { name: "", plan: "", value: "", lastVisit: "", joinDate: "", missedPayments: "", classesBooked: "", schedule: "", email: "", phone: "", location: "" };
   const [addForm, setAddForm]         = useState(blankMember);
   const [selected, setSelected]       = useState(null);
   const [aiResults, setAiResults]     = useState({});
@@ -345,6 +346,7 @@ export default function App() {
   const [activeTab, setActiveTab]     = useState("Dashboard");
   const [outreachLog, setOutreachLog] = useState([]);
   const [filterRisk, setFilterRisk]   = useState("all");
+  const [filterLocation, setFilterLocation] = useState(ALL_LOCATIONS); // multi-location: which site is in view
   const [modalMember, setModalMember] = useState(null);
   const [scheduledIds, setScheduledIds] = useState(new Set());
   const [smsSending, setSmsSending]   = useState({});
@@ -522,7 +524,7 @@ export default function App() {
   function addSingleMember() {
     const esc = (v) => `"${String(v ?? "").replace(/"/g, '""')}"`;
     const f = addForm;
-    const row = [f.name, f.email, f.phone, f.plan, f.value, f.lastVisit, f.joinDate, f.missedPayments, f.classesBooked, f.schedule];
+    const row = [f.name, f.email, f.phone, f.plan, f.value, f.lastVisit, f.joinDate, f.missedPayments, f.classesBooked, f.schedule, f.location];
     const csv = SAMPLE_CSV_HEADERS.map(esc).join(",") + "\n" + row.map(esc).join(",");
     const parsed = parseMembersCSV(csv, Date.now());
     if (!parsed.length) { showToast("Add at least a name"); return; }
@@ -719,21 +721,29 @@ export default function App() {
   };
 
   // ── Derived data ───────────────────────────────────────────────────────────
-  const stats = useMemo(() => buildStats(members, outreachLog), [members, outreachLog]);
+  // ── Multi-location lens ──────────────────────────────────────────────────
+  // Owners with several sites get a global location selector; every derived
+  // value below is computed from the members at the selected site. "all" keeps
+  // the whole roster, so single-location gyms behave exactly as before.
+  const locations       = useMemo(() => listLocations(members), [members]);
+  const locationSummary = useMemo(() => summarizeLocations(members), [members]);
+  const scopedMembers   = useMemo(() => filterByLocation(members, filterLocation), [members, filterLocation]);
+
+  const stats = useMemo(() => buildStats(scopedMembers, outreachLog), [scopedMembers, outreachLog]);
 
   const filteredMembers = useMemo(() => {
     const q = search.trim().toLowerCase();
-    return members.filter(m =>
+    return scopedMembers.filter(m =>
       (filterRisk === "all" || m.risk === filterRisk) &&
       (q === "" || m.name.toLowerCase().includes(q))
     );
-  }, [members, filterRisk, search]);
+  }, [scopedMembers, filterRisk, search]);
 
   const analyticsData = useMemo(() => {
     const riskCounts   = { high: 0, medium: 0, low: 0 };
     const planRevenue  = {};
     let totalRisk      = 0;
-    members.forEach(m => {
+    scopedMembers.forEach(m => {
       riskCounts[m.risk]++;
       planRevenue[m.plan] = (planRevenue[m.plan] || 0) + m.value;
       totalRisk += m.score;
@@ -741,20 +751,20 @@ export default function App() {
     return {
       riskCounts,
       planRevenue,
-      avgRisk: Math.round(totalRisk / members.length),
-      atRiskRevenue: members.filter(m => m.risk === "high").reduce((a, m) => a + m.value, 0),
-      totalRevenue: members.reduce((a, m) => a + m.value, 0),
+      avgRisk: scopedMembers.length ? Math.round(totalRisk / scopedMembers.length) : 0,
+      atRiskRevenue: scopedMembers.filter(m => m.risk === "high").reduce((a, m) => a + m.value, 0),
+      totalRevenue: scopedMembers.reduce((a, m) => a + m.value, 0),
     };
-  }, [members]);
+  }, [scopedMembers]);
 
   const insights = useMemo(
-    () => computeInsights(members, { aiResults, intel, outreachLog }),
-    [members, aiResults, intel, outreachLog]
+    () => computeInsights(scopedMembers, { aiResults, intel, outreachLog }),
+    [scopedMembers, aiResults, intel, outreachLog]
   );
 
   const todaysQueue = useMemo(
-    () => pickTodaysQueue(members, { aiResults, outreachLog, dismissed: dismissedToday, size: 3 }),
-    [members, aiResults, outreachLog, dismissedToday]
+    () => pickTodaysQueue(scopedMembers, { aiResults, outreachLog, dismissed: dismissedToday, size: 3 }),
+    [scopedMembers, aiResults, outreachLog, dismissedToday]
   );
 
   // ══════════════════════════════════════════════════════════════════════════
@@ -836,7 +846,7 @@ export default function App() {
                   <div>
                     <h1 style={{ margin: 0, fontSize: 26, fontWeight: 700, color: "#1a1a2e" }}>Member Retention Dashboard</h1>
                     <p style={{ margin: "4px 0 0", color: "#888", fontSize: 14 }}>
-                      {usingImported ? "Your imported roster" : "Pulse Studio"} · {members.length} active members
+                      {usingImported ? "Your imported roster" : "Pulse Studio"} · {scopedMembers.length} {filterLocation === ALL_LOCATIONS ? "active members" : `members at ${filterLocation}`}
                       {usingImported && (
                         <button onClick={resetToDemo} style={{ marginLeft: 10, background: "none", border: "none", color: "#185fa5", fontSize: 12, cursor: "pointer", textDecoration: "underline", padding: 0 }}>↺ reset to demo</button>
                       )}
@@ -852,6 +862,24 @@ export default function App() {
                       aria-label="Search members by name"
                       style={{ padding: "8px 12px", borderRadius: 20, border: "1px solid #ddd", fontSize: 12, outline: "none", minWidth: 150 }}
                     />
+                    {/* Location filter — shown only when the owner has more than one site */}
+                    {locations.length > 1 && (
+                      <select
+                        value={filterLocation}
+                        onChange={e => setFilterLocation(e.target.value)}
+                        aria-label="Filter members by location"
+                        style={{
+                          padding: "8px 12px", borderRadius: 20, fontSize: 12, outline: "none", cursor: "pointer", fontFamily: "inherit",
+                          border: filterLocation === ALL_LOCATIONS ? "1px solid #ddd" : "1px solid #1a1a2e",
+                          background: filterLocation === ALL_LOCATIONS ? "#fff" : "#1a1a2e",
+                          color: filterLocation === ALL_LOCATIONS ? "#555" : "#fff",
+                          fontWeight: filterLocation === ALL_LOCATIONS ? 400 : 700,
+                        }}
+                      >
+                        <option value={ALL_LOCATIONS}>📍 All locations</option>
+                        {locations.map(loc => <option key={loc} value={loc}>{loc}</option>)}
+                      </select>
+                    )}
                     {/* Filter pills */}
                     {["all","high","medium","low"].map(f => (
                       <button
@@ -894,6 +922,35 @@ export default function App() {
                     >➕ Add Members</button>
                   </div>
                 </div>
+
+                {/* ── Locations overview (who is where) — tap a card to filter ── */}
+                {locations.length > 1 && (
+                  <div style={{ marginBottom: 28 }}>
+                    <p style={{ margin: "0 0 10px", fontSize: 13, fontWeight: 600, color: "#888" }}>Your locations · tap to filter</p>
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 12 }}>
+                      {[{ location: ALL_LOCATIONS, total: members.length, high: members.filter(m => m.risk === "high").length, revenue: members.reduce((a, m) => a + (m.value || 0), 0) }, ...locationSummary].map(loc => {
+                        const isAll  = loc.location === ALL_LOCATIONS;
+                        const active = filterLocation === loc.location;
+                        return (
+                          <button
+                            key={loc.location}
+                            onClick={() => setFilterLocation(loc.location)}
+                            aria-pressed={active}
+                            style={{ textAlign: "left", cursor: "pointer", fontFamily: "inherit", borderRadius: 12, padding: "14px 16px", boxShadow: "0 1px 4px rgba(0,0,0,0.06)", background: active ? "#1a1a2e" : "#fff", color: active ? "#fff" : "#1a1a2e", border: active ? "2px solid #1a1a2e" : "1px solid #eee" }}
+                          >
+                            <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 14, fontWeight: 700 }}>
+                              <span>{isAll ? "🏢" : "📍"}</span>{isAll ? "All locations" : loc.location}
+                            </div>
+                            <div style={{ fontSize: 12, marginTop: 6, color: active ? "#cfcfe6" : "#888" }}>
+                              {loc.total} member{loc.total !== 1 ? "s" : ""} · <span style={{ fontWeight: 600, color: loc.high > 0 ? (active ? "#ff9a8d" : "#c0392b") : (active ? "#cfcfe6" : "#888") }}>{loc.high} high-risk</span>
+                            </div>
+                            <div style={{ fontSize: 12, marginTop: 2, color: active ? "#9fb0d6" : "#aaa" }}>${loc.revenue.toLocaleString()}/mo</div>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
 
                 {/* ── Today's Priorities (the daily action queue) ── */}
                 <div style={{ background: "linear-gradient(135deg,#1a1a2e,#23234a)", borderRadius: 16, padding: "20px 24px", marginBottom: 28, boxShadow: "0 4px 18px rgba(26,26,46,0.18)" }}>
@@ -971,7 +1028,7 @@ export default function App() {
                   <div style={{ padding: "18px 24px", borderBottom: "1px solid #f0f0f0", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                     <h2 style={{ margin: 0, fontSize: 16, fontWeight: 700, color: "#1a1a2e" }}>Member Risk Monitor</h2>
                     <span style={{ background: "#fff1f1", color: "#c0392b", fontSize: 12, fontWeight: 600, padding: "3px 10px", borderRadius: 20 }}>
-                      {members.filter(m => m.risk === "high").length} need attention
+                      {scopedMembers.filter(m => m.risk === "high").length} need attention
                     </span>
                   </div>
 
@@ -1011,6 +1068,7 @@ export default function App() {
                                 <div style={{ width: 34, height: 34, borderRadius: "50%", background: rc.bg, color: rc.color, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, fontWeight: 700, flexShrink: 0, border: `1.5px solid ${rc.border}` }}>{m.initials}</div>
                                 <div style={{ flex: 1, minWidth: 0 }}>
                                   <span style={{ fontSize: 14, fontWeight: 600, color: "#1a1a2e", display: "block" }}>{m.name}</span>
+                                  {m.location && <span style={{ fontSize: 10, color: "#8e44ad", fontWeight: 600, display: "block", marginTop: 1 }}>📍 {m.location}</span>}
                                   {ai && !ai.error && <span style={{ fontSize: 11, color: "#27ae60", fontWeight: 600 }}>✓ AI analyzed</span>}
                                   {ai && ai.error && <span style={{ fontSize: 11, color: "#c0392b", fontWeight: 600 }}>⚠ analysis failed</span>}
                                   {isLoading && <span style={{ fontSize: 11, color: "#f39c12" }}>⏳ analyzing...</span>}
@@ -1046,6 +1104,7 @@ export default function App() {
                             <div style={{ width: 34, height: 34, borderRadius: "50%", background: rc.bg, color: rc.color, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, fontWeight: 700, flexShrink: 0, border: `1.5px solid ${rc.border}` }}>{m.initials}</div>
                             <div>
                               <span style={{ fontSize: 14, fontWeight: 600, color: "#1a1a2e", display: "block" }}>{m.name}</span>
+                              {m.location && <span style={{ fontSize: 10, color: "#8e44ad", fontWeight: 600, display: "block", marginTop: 1 }}>📍 {m.location}</span>}
                               {ai && !ai.error && <span style={{ fontSize: 11, color: "#27ae60", fontWeight: 600 }}>✓ AI analyzed</span>}
                               {ai && ai.error && <span style={{ fontSize: 11, color: "#c0392b", fontWeight: 600 }}>⚠ analysis failed</span>}
                               {isLoading && <span style={{ fontSize: 11, color: "#f39c12" }}>⏳ analyzing...</span>}
@@ -1577,6 +1636,7 @@ export default function App() {
               { key: "missedPayments", label: "Missed payments", ph: "0" },
               { key: "classesBooked", label: "Classes booked ahead", ph: "2" },
               { key: "schedule", label: "Usual schedule", ph: "Mon & Wed" },
+              { key: "location", label: "Location", ph: "Downtown" },
               { key: "email", label: "Email (optional)", ph: "jordan@email.com" },
               { key: "phone", label: "Phone (optional)", ph: "(704) 555-0100" },
             ];
