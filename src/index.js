@@ -3,14 +3,24 @@ import ReactDOM from 'react-dom/client';
 import { Authenticator } from '@aws-amplify/ui-react';
 import './index.css';
 import App from './App';
+import MemberDemo from './MemberDemo';
 import reportWebVitals from './reportWebVitals';
+
+// No-login member-app demo: open the app at "/#member-demo" to show the
+// member experience on a phone in front of customers. Any other URL renders
+// the normal owner app (Cognito login) exactly as before.
+const isMemberDemo = window.location.hash.replace(/^#\/?/, '').startsWith('member-demo');
 
 const root = ReactDOM.createRoot(document.getElementById('root'));
 root.render(
   <React.StrictMode>
-    <Authenticator.Provider>
-      <App />
-    </Authenticator.Provider>
+    {isMemberDemo ? (
+      <MemberDemo />
+    ) : (
+      <Authenticator.Provider>
+        <App />
+      </Authenticator.Provider>
+    )}
   </React.StrictMode>
 );
 
