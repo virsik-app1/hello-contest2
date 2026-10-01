@@ -81,6 +81,14 @@ async function apiFetch(payload) {
   });
 }
 
+// Prefer the server's own explanation (daily limit reached, member opted out,
+// quiet hours…) over a bare status code.
+async function serverError(response) {
+  let msg = `Server returned ${response.status}`;
+  try { const d = await response.json(); if (d && d.error) msg = d.error; } catch { /* non-JSON body */ }
+  return new Error(msg);
+}
+
 // ─── Member data ────────────────────────────────────────────────────────────
 const initialMembers = [
   { id: 1,  name: "Sarah Reynolds",  initials: "SR", plan: "Unlimited Monthly", lastVisit: "9 days ago",  usualVisits: "Tue & Thu",      risk: "high",   score: 91, value: 79,  email: "sarah.r@email.com",  phone: "(704) 555-0192", joinedMonths: 14, missedPayments: 0, classesBooked: 2, location: "Downtown" },
@@ -131,7 +139,7 @@ Classes booked ahead: ${member.classesBooked}
 Current risk score: ${member.score}/100`
       }]
   });
-  if (!response.ok) throw new Error(`Server returned ${response.status}`);
+  if (!response.ok) throw await serverError(response);
   const data = await response.json();
   if (data.error) throw new Error(data.error);
   if (!Array.isArray(data.content)) throw new Error("Unexpected AI response");
@@ -148,7 +156,7 @@ async function sendRealSMS(toPhone, message) {
       to: toPhone,
       message,
   });
-  if (!response.ok) throw new Error(`Server returned ${response.status}`);
+  if (!response.ok) throw await serverError(response);
   const data = await response.json();
   if (!data.success) throw new Error(data.error || "SMS failed");
   return data;
@@ -175,7 +183,7 @@ Write the studio's next text back. Be warm, human, and specific to what they sai
 Member: ${member.name}, on ${member.plan} ($${member.value}/mo), ${member.joinedMonths} months as a member.`
       }]
   });
-  if (!response.ok) throw new Error(`Server returned ${response.status}`);
+  if (!response.ok) throw await serverError(response);
   const data = await response.json();
   if (data.error) throw new Error(data.error);
   if (!Array.isArray(data.content)) throw new Error("Unexpected AI response");

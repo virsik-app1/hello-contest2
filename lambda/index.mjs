@@ -1,16 +1,12 @@
-// PulseRetain Lambda — ROLLBACK to the original working version (no auth gate).
-// This is the exact code that was running when AI analysis last worked, with
-// three minimal patches:
-//   1. ES-module syntax (import/export) because the live handler file is
-//      index.mjs — classic require/exports crashes on startup there (the 502s).
-//   2. HTTP method is read from both Function URL payload formats
-//      (event.requestContext.http.method OR event.httpMethod).
-//   3. "Authorization" added to allowed CORS headers, so the current frontend
-//      (which attaches a login token) passes preflight. The token is ignored.
+// PulseRetain Lambda — the single backend for the owner dashboard.
+// ES modules only (the live handler file is index.mjs; require() crashes it).
+// Every route except the public demo-lead form and the signed Twilio webhook
+// requires a verified Cognito login, and all data is scoped to that gym.
+// AI calls and texts are capped per gym per day (see COST GUARDS).
 import https from "https";
 import crypto from "crypto";
 import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
-import { DynamoDBDocumentClient, PutCommand, GetCommand, ScanCommand } from "@aws-sdk/lib-dynamodb";
+import { DynamoDBDocumentClient, PutCommand, GetCommand, ScanCommand, UpdateCommand } from "@aws-sdk/lib-dynamodb";
 import { SESClient, SendEmailCommand } from "@aws-sdk/client-ses";
 
 // ─── DynamoDB setup ───────────────────────────────────────────────────────────
@@ -265,6 +261,52 @@ async function updateOutreachStatus(tenantId, logId, status) {
 
 const REPLY_MODEL      = "claude-haiku-4-5-20251001";
 const REPLY_MAX_TOKENS = 500;
+
+// ═══ COST GUARDS — every AI call and text message is paid for by PulseRetain ══
+// The server (not the browser) decides which model runs and how long the answer
+// may be, and each gym account gets a daily budget of AI calls and texts. This
+// stops a curious or malicious signed-up user from running up the Anthropic or
+// Twilio bill. Limits are env-overridable without a code change.
+const ANALYZE_MODEL        = "claude-haiku-4-5-20251001";
+const ANALYZE_MAX_TOKENS   = 600;
+const ANALYZE_MAX_CHARS    = 6000;   // the dashboard's prompts are ~1.5k chars
+const DAILY_AI_LIMIT       = Number(process.env.DAILY_AI_LIMIT)  || 200;
+const DAILY_SMS_LIMIT      = Number(process.env.DAILY_SMS_LIMIT) || 100;
+const SMS_MAX_CHARS        = 480;
+
+// Atomically count one use of `kind` ("ai" | "sms") for this tenant today (UTC).
+// Returns false once the day's limit is reached. Stored in the outreach table as
+// a `usage#...` item (type "usage" — never shown on the dashboard).
+async function consumeQuota(tenantId, kind, limit) {
+  const day = new Date().toISOString().slice(0, 10);
+  try {
+    await dynamo.send(new UpdateCommand({
+      TableName: OUTREACH_TABLE,
+      Key: { logID: `usage#${tenantId}#${kind}#${day}` },
+      UpdateExpression: "ADD #n :one SET #t = :type, tenantId = :tid, #d = :day",
+      ConditionExpression: "attribute_not_exists(#n) OR #n < :limit",
+      ExpressionAttributeNames: { "#n": "count", "#t": "type", "#d": "day" },
+      ExpressionAttributeValues: { ":one": 1, ":limit": limit, ":type": "usage", ":tid": tenantId, ":day": day },
+    }));
+    return true;
+  } catch (e) {
+    if (e.name === "ConditionalCheckFailedException") return false;
+    throw e;
+  }
+}
+
+function quotaExceeded(what, limit) {
+  return { statusCode: 429, headers: { ...CORS, "Content-Type": "application/json" },
+    body: JSON.stringify({ error: `Daily ${what} limit reached (${limit} per day during the beta). It resets at midnight UTC — contact PulseRetain if you need more.`, code: "quota_exceeded" }) };
+}
+
+// The dashboard sends a single user prompt; reject anything else so the endpoint
+// can't be used as a general-purpose Claude proxy.
+function validAnalyzeMessages(messages) {
+  if (!Array.isArray(messages) || messages.length !== 1) return false;
+  const m = messages[0];
+  return m && m.role === "user" && typeof m.content === "string" && m.content.length <= ANALYZE_MAX_CHARS;
+}
 const SENTIMENTS = new Set(["positive", "neutral", "hesitant", "leaving"]);
 const OFFERS     = new Set(["class_credit", "discount_percent", "free_guest_pass", "personal_trainer_intro", "pause_membership", "none"]);
 // Competitive-intelligence signal: WHY the member is drifting. "competitor"
@@ -614,10 +656,15 @@ export const handler = async (event) => {
       if (!process.env.ANTHROPIC_API_KEY) {
         return { statusCode: 500, headers: CORS, body: JSON.stringify({ error: "ANTHROPIC_API_KEY not set" }) };
       }
+      if (!validAnalyzeMessages(body.messages)) {
+        return { statusCode: 400, headers: CORS, body: JSON.stringify({ error: "Invalid analysis request" }) };
+      }
+      if (!(await consumeQuota(tenantId, "ai", DAILY_AI_LIMIT))) return quotaExceeded("AI", DAILY_AI_LIMIT);
+      // Model and length are chosen here, never by the caller.
       const response = await callClaude(
         body.messages,
-        body.model || "claude-haiku-4-5-20251001",
-        body.max_tokens || 400
+        ANALYZE_MODEL,
+        Math.min(Number(body.max_tokens) || 400, ANALYZE_MAX_TOKENS)
       );
       const claudeData = JSON.parse(response.body);
 
@@ -643,6 +690,7 @@ export const handler = async (event) => {
       const phone = toE164(body.to);
       if (!phone)          return { statusCode: 400, headers: CORS, body: JSON.stringify({ error: "Invalid phone number" }) };
       if (!body.message)   return { statusCode: 400, headers: CORS, body: JSON.stringify({ error: "Missing 'message'" }) };
+      if (String(body.message).length > SMS_MAX_CHARS) return { statusCode: 400, headers: CORS, body: JSON.stringify({ error: `Message too long (max ${SMS_MAX_CHARS} characters)` }) };
 
       // 1) Never text someone who has opted out (TCPA + Twilio requirement).
       if (await isOptedOut(phone)) {
@@ -654,7 +702,9 @@ export const handler = async (event) => {
         return { statusCode: 403, headers: { ...CORS, "Content-Type": "application/json" },
           body: JSON.stringify({ error: `Outside allowed texting hours (${QUIET_START}:00–${QUIET_END}:00 ${QUIET_TZ}). Message not sent.`, code: "quiet_hours" }) };
       }
-      // 3) On first contact (or when asked), append the opt-out notice if it fits.
+      // 3) Daily texting budget per gym (checked last so blocked sends don't count).
+      if (!(await consumeQuota(tenantId, "sms", DAILY_SMS_LIMIT))) return quotaExceeded("texting", DAILY_SMS_LIMIT);
+      // 4) On first contact (or when asked), append the opt-out notice if it fits.
       let outText = String(body.message);
       const first = await isFirstContact(phone);
       const needsFooter = (first || body.includeOptOut === true) && !/\bstop\b/i.test(outText);
@@ -749,6 +799,7 @@ export const handler = async (event) => {
         await saveConversation(tenantId, memberId, member.name, turns, { intel: priorIntel, memberValue });
       }
 
+      if (!(await consumeQuota(tenantId, "ai", DAILY_AI_LIMIT))) return quotaExceeded("AI", DAILY_AI_LIMIT);
       const response = await callClaude(
         [{ role: "user", content: buildReplyUserMessage(member, turns) }],
         REPLY_MODEL,
