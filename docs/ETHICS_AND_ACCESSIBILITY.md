@@ -1,44 +1,44 @@
-# PulseRetain — Ethics, Accessibility & Cross-Disciplinary Notes
+# PulseRetain — Ethical AI, Accessibility & Cross-Disciplinary Design
 
-This document addresses the competition's bonus criteria (up to 5 points): ethical AI considerations, accessibility, and cross-disciplinary application.
+*Addressing the competition's bonus criteria (up to 5 points): exceptional ethical AI considerations, accessibility features, and cross-disciplinary application.*
 
-## Ethical AI
+PulseRetain makes predictions about real people and then reaches out to them. That responsibility shaped the design from the start — the goal was a tool that *earns* members back, not one that manipulates or surveils them.
 
-PulseRetain makes predictions about people and then contacts them, so it was designed with several guardrails:
+## 1. Ethical AI
 
-**Human in the loop.** The AI never contacts a member on its own. It *recommends* — a score, a reason, and a drafted message — and a staff member decides whether to send. Nothing is automated past the point of human judgment. This keeps a person accountable for every message a member receives.
+**A human sends every message — the AI never acts alone.** PulseRetain *recommends*: a risk score, a plain-language reason, and a drafted text. A staff member reads it and taps send. Nothing reaches a member without a person's judgment in the loop, so a human stays accountable for every word.
 
-**Transparency, not a black box.** Every prediction comes with a plain-language reason ("hasn't visited in 9 days and has no upcoming classes booked"). The owner sees *why* a member is flagged, rather than being handed an unexplained number. This makes it possible to catch and override a bad call.
+**We chose consent over surveillance.** A judge suggested geofencing — tracking members' phone locations to detect when they visit a competitor gym. We deliberately rejected it. PulseRetain's Competitive Intelligence is built **only** from what members voluntarily say in conversation ("I'm switching to F45"), never from location tracking. We picked the harder, more private path on purpose — the single clearest ethical decision in the project.
 
-**Data minimization & PII protection.** Only the signals needed for the task are used (visit recency, schedule, tenure, payments, bookings). Personal identifiers (name, email, phone) are sent only to the secure backend for the narrow purpose of generating and delivering a message — never placed in URLs, never logged client-side, never embedded in the public frontend. All credentials are server-side.
+**No dark patterns.** The AI is instructed to offer something *fair* — a membership pause, a class credit, a check-in — not false urgency, guilt, or a discount war. When a member says "it's too expensive," the system drafts a *pause*, respecting that some people genuinely should leave.
 
-**Respectful, non-manipulative outreach.** The prompt asks Claude for a genuinely helpful, personalized win-back message and a *fair* retention offer (a class credit, a guest pass, a trainer intro) — not dark-pattern pressure or false urgency. The goal is to re-engage members who would genuinely benefit, not to trap people who want to leave.
+**Safety guardrails on the conversation.** The reply agent runs a server-side safety branch: it will not improvise around sensitive disclosures (a crisis, a minor, a medical issue) and is hardened against prompt-injection, so a hostile message can't hijack the studio's AI.
 
-**Avoiding unfair bias.** The model scores behavior, not identity — it is never given protected attributes (age, gender, race, etc.). Because behavioral signals can still correlate with such attributes, the human-in-the-loop and visible reasoning act as a check, and a real deployment would add periodic review of who gets flagged to watch for skew.
+**It judges behavior, not identity.** The model is never given age, gender, race, or any protected attribute — only engagement signals (visit recency, schedule, tenure, missed payments, bookings). Because behavioral signals can still correlate with protected attributes, the visible reasoning and human-in-the-loop act as a check, and a real deployment would add periodic review of who gets flagged to watch for skew.
+
+**Privacy by default.** Only the signals needed for the task are used; names, emails, and phone numbers go solely to a secure backend for the narrow purpose of writing and delivering one message — never placed in URLs, never logged client-side, never embedded in the public frontend. All third-party credentials live server-side.
 
 **Honest representation.** The demo uses a clearly synthetic member roster; the project does not claim to use real customer data it does not have.
 
-## Accessibility
+## 2. Accessibility
 
 The app was reviewed against common accessibility needs, and the following were implemented or hardened:
 
-- **Real text on controls.** Buttons say what they do ("Analyze", "Send SMS Now", "Log Only", "Sign out") rather than relying on icons alone.
-- **Labels for assistive tech.** Icon-only and ambiguous controls (e.g., the modal close button, filter pills) carry `aria-label`s so screen readers announce their purpose.
-- **Keyboard operability.** The member detail dialog can be closed with the **Escape** key, and the dialog is marked up with `role="dialog"`/`aria-modal` so screen readers treat it correctly.
-- **Status messages are announced.** Toast notifications use a polite live region so confirmations ("Outreach logged") are read aloud.
-- **Color is not the only signal.** Risk is shown with a text label ("High Risk", "Safe") in addition to color, so it's distinguishable without color vision.
-- **Readable contrast & sizing.** Dark navy text on light cards and white-on-color buttons meet legibility expectations.
-- **Responsive layout.** Card grids and the header reflow with `auto-fit` so the app remains usable on smaller screens.
+- **Screen-reader support** — icon-only and ambiguous controls (modal close, filter pills) carry `aria-label`s; the member detail dialog uses `role="dialog"` / `aria-modal`; status confirmations ("Outreach logged") announce through a polite live region.
+- **Keyboard operable** — dialogs close with **Escape**; controls are real buttons with real text ("Analyze", "Send SMS Now", "Sign out"), not icons alone.
+- **Color is not the only signal** — risk shows a text label ("High Risk", "Safe") alongside color, so it's distinguishable without color vision; dark-navy-on-light and white-on-color meet legibility expectations.
+- **Works everywhere** — a responsive, installable PWA that reflows with `auto-fit` and runs full-screen from a phone's home screen, so a busy front-desk owner can use it one-handed.
 
-(See `CHANGELOG_ENHANCEMENTS.md` for the specific accessibility code changes made.)
+(See `CHANGELOG_ENHANCEMENTS.md` for the specific accessibility code changes.)
 
-## Cross-disciplinary application
+## 3. Cross-Disciplinary Application
 
-PulseRetain sits deliberately at the intersection of several fields:
+PulseRetain sits deliberately at the intersection of **AI, management, finance, and small-business survival:**
 
-- **Business / marketing:** it operationalizes a core retention-economics insight (retention is ~5× cheaper than acquisition) into a working tool, with revenue-at-risk and revenue-saved framed in dollars an owner cares about.
-- **Behavioral science:** churn risk is inferred from behavioral signals (engagement recency, routine disruption, forward commitment), and outreach is timed with a follow-up cadence rather than sent blindly.
-- **Computer science / cloud engineering:** a secure serverless architecture (Cognito, Lambda, DynamoDB, Amplify) with disciplined secret management.
-- **Applied AI:** a single LLM call performs prediction, explanation, and natural-language generation together, with structured output engineered for reliability.
+- **Management & retention economics** — it operationalizes the core insight that retention is ~5× cheaper than acquisition into a daily to-do list, with revenue-at-risk and revenue-saved shown in real dollars an owner cares about.
+- **Behavioral science** — churn risk is inferred from routine disruption and forward commitment (engagement recency, schedule, tenure, bookings), and outreach is *timed* with a follow-up cadence rather than blasted.
+- **Computer science / cloud engineering** — a secure serverless architecture (Cognito, Lambda, DynamoDB, Amplify) with disciplined secret management.
+- **Applied AI** — a single LLM call performs prediction, explanation, and natural-language generation together, with structured output engineered for reliability; a second call holds the two-way conversation.
+- **Social good** — independent studios run on thin margins; a tool that recovers even a few members a month can be the difference between a local gym staying open or closing.
 
-The result is not "an AI demo" but a small, plausible product a real studio owner in SIC 7997 could adopt.
+The result is not "an AI demo" but a small, plausible product a real studio owner in SIC 7997 could adopt — built to be **fair, transparent, and humane** by design.
