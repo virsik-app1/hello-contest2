@@ -52,8 +52,8 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Ar
 <div id="p-today" class="panel on">
   <div class="brandbar topsafe"><span class="pill"><i class="ti ti-activity-heartbeat"></i>PulseRetain</span><i class="ti ti-bell" style="font-size:20px"></i></div>
   <div class="body">
-    <div style="font-size:20px;font-weight:700;color:#1a1a2e">Good afternoon, Jordan</div>
-    <div class="mut" style="margin-bottom:14px">Wednesday, June 18</div>
+    <div id="greet" style="font-size:20px;font-weight:700;color:#1a1a2e">Good afternoon, Jordan</div>
+    <div id="today-date" class="mut" style="margin-bottom:14px">Wednesday, June 18</div>
     <div class="lcard" style="padding:14px;margin-bottom:12px">
       <div class="row"><span style="background:#fdeceb;color:#c0392b;font-size:11px;font-weight:600;padding:3px 9px;border-radius:7px">NEXT CLASS</span><span class="mut" style="font-size:12px">in 2h 18m</span></div>
       <div style="font-size:17px;font-weight:600;color:#1a1a2e;margin-top:10px">Spin</div>
@@ -310,6 +310,12 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Ar
   var MAIN=['today','classes','scans','messages','me'];
   var locEnabled=false, locBg=false, visits=[];
   function $(id){return document.getElementById(id)}
+  // Show today's real date and a matching greeting so the demo never looks stale.
+  (function(){
+    var d=new Date(), h=d.getHours();
+    $('greet').textContent=(h<12?'Good morning':h<17?'Good afternoon':'Good evening')+', Jordan';
+    $('today-date').textContent=d.toLocaleDateString('en-US',{weekday:'long',month:'long',day:'numeric'});
+  })();
   function toast(t){var el=$('toast');el.textContent=t;el.style.display='block';clearTimeout(el._t);el._t=setTimeout(function(){el.style.display='none'},2600)}
   function show(id){
     var ps=document.querySelectorAll('.panel');
