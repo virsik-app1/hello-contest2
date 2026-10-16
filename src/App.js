@@ -3,7 +3,7 @@ import { fetchAuthSession } from "aws-amplify/auth";
 import { Authenticator, useAuthenticator, ThemeProvider } from "@aws-amplify/ui-react";
 import "@aws-amplify/ui-react/styles.css";
 import { awsConfig } from "./aws-config";
-import { buildStats, deriveRisk, pickTodaysQueue } from "./retention";
+import { buildStats, deriveRisk, isDemoPhone, pickTodaysQueue } from "./retention";
 import { parseMembersCSV, SAMPLE_CSV_HEADERS, SAMPLE_CSV_ROWS, SAMPLE_GYM_CSV } from "./importMembers";
 import { computeInsights } from "./strategist";
 import { listLocations, filterByLocation, summarizeLocations, ALL_LOCATIONS } from "./locations";
@@ -150,7 +150,13 @@ Current risk score: ${member.score}/100`
 }
 
 // ─── Send real SMS via Lambda → Twilio ───────────────────────────────────────
+// Sample members have fictional 555 numbers that no carrier can deliver to, so
+// those sends are simulated (and labelled as such) instead of failing.
 async function sendRealSMS(toPhone, message) {
+  if (isDemoPhone(toPhone)) {
+    await new Promise(r => setTimeout(r, 700));
+    return { success: true, simulated: true };
+  }
   const response = await apiFetch({
       action: "send_sms",
       to: toPhone,
@@ -602,10 +608,12 @@ export default function App() {
     }
     setSmsSending(prev => ({ ...prev, [member.id]: true }));
     try {
-      await sendRealSMS(member.phone, ai.message);
+      const res = await sendRealSMS(member.phone, ai.message);
       setSmsSent(prev => new Set([...prev, member.id]));
       markOutreach(member, ai, true);
-      showToast(`📱 SMS sent to ${member.name.split(" ")[0]}!`);
+      showToast(res.simulated
+        ? `📱 Text sent to ${member.name.split(" ")[0]} (sample member — simulated)`
+        : `📱 SMS sent to ${member.name.split(" ")[0]}!`);
     } catch (err) {
       showToast(`❌ SMS failed: ${err.message}`);
     }
@@ -648,9 +656,11 @@ export default function App() {
     if (!member.phone) { showToast("❌ No phone number on file for " + member.name.split(" ")[0]); return; }
     setReplySending(prev => ({ ...prev, [member.id]: true }));
     try {
-      await sendRealSMS(member.phone, draft.reply);
+      const res = await sendRealSMS(member.phone, draft.reply);
       await recordReplyOnThread(member, draft.reply);
-      showToast(`📱 Reply sent to ${member.name.split(" ")[0]}!`);
+      showToast(res.simulated
+        ? `📱 Reply sent to ${member.name.split(" ")[0]} (sample member — simulated)`
+        : `📱 Reply sent to ${member.name.split(" ")[0]}!`);
     } catch (err) {
       showToast(`❌ Reply failed: ${err.message}`);
     }

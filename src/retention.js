@@ -59,3 +59,12 @@ export function buildStats(members, outreachLog) {
     { label: "At-Risk Members",   value: String(highRisk),                  sub: "right now",        accent: true  },
   ];
 }
+
+// Sample/demo members use fictional 555 numbers (e.g. "(704) 555-0192"). Texts
+// to them can never be delivered, so the dashboard simulates the send instead
+// of calling Twilio — demos never show a carrier failure for a fake number.
+export function isDemoPhone(phone) {
+  let d = String(phone || "").replace(/\D/g, "");
+  if (d.length === 11 && d[0] === "1") d = d.slice(1);
+  return d.length === 10 && d.slice(3, 6) === "555";
+}

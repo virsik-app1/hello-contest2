@@ -1,4 +1,14 @@
-import { buildStats, deriveRisk, isResponse, pickTodaysQueue } from "./retention";
+import { buildStats, deriveRisk, isDemoPhone, isResponse, pickTodaysQueue } from "./retention";
+
+describe("isDemoPhone", () => {
+  test("fictional 555 numbers are demo numbers; real numbers are not", () => {
+    expect(isDemoPhone("(704) 555-0192")).toBe(true);
+    expect(isDemoPhone("+1 980-555-0341")).toBe(true);
+    expect(isDemoPhone("(704) 321-8843")).toBe(false);
+    expect(isDemoPhone("")).toBe(false);
+    expect(isDemoPhone("555-0192")).toBe(false); // too short to tell — treat as real
+  });
+});
 
 describe("isResponse", () => {
   test("only 'responded' and 'recovered' count as a response", () => {
