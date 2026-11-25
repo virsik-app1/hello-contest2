@@ -108,9 +108,9 @@ const initialMembers = [
 
 // ─── Risk config ─────────────────────────────────────────────────────────────
 const riskConfig = {
-  high:   { label: "High Risk", bg: "#fff1f1", color: "#c0392b", bar: "#e74c3c", border: "#fbc9c9" },
+  high:   { label: "High",      bg: "#fff1f1", color: "#c0392b", bar: "#e74c3c", border: "#fbc9c9" },
   medium: { label: "Medium",    bg: "#fffbf0", color: "#b7770d", bar: "#f39c12", border: "#fde8a8" },
-  low:    { label: "Safe",      bg: "#f0faf4", color: "#1e7e45", bar: "#27ae60", border: "#b6e8c8" },
+  low:    { label: "Low",       bg: "#f0faf4", color: "#1e7e45", bar: "#27ae60", border: "#b6e8c8" },
 };
 
 // ─── Lambda URL (all API calls go through here — no secrets in the browser) ───
@@ -276,24 +276,16 @@ async function fetchCompetitiveIntel() {
 
 // ─── Offer badge labels ───────────────────────────────────────────────────────
 const offerLabels = {
-  class_credit:            "🎟 Free Class Credit",
-  discount_percent:        "💸 10% Discount",
-  free_guest_pass:         "👥 Guest Pass",
-  personal_trainer_intro:  "💪 PT Session",
-  pause_membership:        "⏸ Offer to Pause",
+  class_credit:            "Free class",
+  discount_percent:        "10% off",
+  free_guest_pass:         "Guest pass",
+  personal_trainer_intro:  "Free PT session",
+  pause_membership:        "Pause membership",
   none:                    null,
 };
 
 // ─── Nav tabs ─────────────────────────────────────────────────────────────────
-const TABS = ["Dashboard", "Strategist", "Outreach", "Analytics", "Competitors"];
-
-// Severity styling for Retention Strategist findings
-const severityMeta = {
-  high:   { chip: "Critical", color: "#c0392b", bg: "#fff1f1", border: "#fbc9c9", icon: "🔴" },
-  medium: { chip: "Watch",    color: "#b7770d", bg: "#fffbf0", border: "#fde8a8", icon: "🟡" },
-  info:   { chip: "Insight",  color: "#185fa5", bg: "#e8f4fd", border: "#b3d9f5", icon: "🔵" },
-  good:   { chip: "Win",      color: "#1e7e45", bg: "#f0faf4", border: "#b6e8c8", icon: "✅" },
-};
+const TABS = ["Today", "Outreach", "Insights"];
 
 // Labels for the competitive-intel "why they leave" breakdown
 const reasonMeta = {
@@ -345,13 +337,11 @@ const authComponents = {
     return (
       <div style={{ textAlign: "center", padding: "40px 20px 14px" }}>
         <div style={{ display: "inline-flex", alignItems: "center", gap: 12, marginBottom: 16 }}>
-          <div style={{ width: 50, height: 50, borderRadius: 13, background: "linear-gradient(135deg,#e74c3c,#c0392b)", display: "flex", alignItems: "center", justifyContent: "center", boxShadow: "0 6px 20px rgba(231,76,60,0.5)" }}>
-            <span style={{ color: "#fff", fontSize: 27 }}>⚡</span>
-          </div>
+          <Logo size={50} />
           <span style={{ color: "#fff", fontWeight: 700, fontSize: 31, letterSpacing: 0.5 }}>PulseRetain</span>
         </div>
         <p style={{ color: "#cfd0e8", fontSize: 15, margin: "0 auto", maxWidth: 370, lineHeight: 1.55 }}>
-          AI that spots the members about to quit — and writes the text that wins them back.
+          Spot the members about to quit, and send the text that wins them back.
         </p>
       </div>
     );
@@ -359,7 +349,7 @@ const authComponents = {
   Footer() {
     return (
       <div style={{ textAlign: "center", padding: "18px 20px 40px" }}>
-        <p style={{ color: "#8a8ba8", fontSize: 12, margin: 0 }}>Member retention, on autopilot · built for fitness studios</p>
+        <p style={{ color: "#8a8ba8", fontSize: 12, margin: 0 }}>Member retention for fitness studios</p>
       </div>
     );
   },
@@ -370,6 +360,127 @@ const DEMO_USER = { signInDetails: { loginId: "Demo gym · sample data" } };
 function AuthGate({ children }) {
   if (IS_DEMO) return children({ signOut: exitDemoToSignUp, user: DEMO_USER });
   return <Authenticator components={authComponents}>{children}</Authenticator>;
+}
+
+// ─── Design tokens (minimal look: brand navy + red, lots of white) ──────────
+// Brand colors and Georgia stay; color is reserved for money and risk so the
+// numbers that matter stand out against a quiet page.
+const T = {
+  ink:      "#1a1a2e",   // brand navy: text, primary buttons
+  body:     "#3d3d50",
+  muted:    "#6b6b80",
+  faint:    "#9a9aae",
+  line:     "#e7e7ee",
+  soft:     "#f3f3f7",
+  page:     "#f6f5fa",
+  red:      "#e74c3c",   // brand red: bad news (money at risk, high risk)
+  redDark:  "#c0392b",
+  redTint:  "#fdeeec",
+  amber:    "#e0a800",   // yellow: in-between (risk score 35 to 75)
+  amberDark:"#9a7400",
+  amberTint:"#fdf7e1",
+  green:    "#1e7e45",   // green: good news (won back, low risk)
+  greenMid: "#27ae60",
+  greenTint:"#e9f7ef",
+  purple:   "#8e44ad",   // PulseRetain accents
+  purpleTint:"#f5eefa",
+  orange:   "#e67e22",
+  orangeTint:"#fdf1e5",
+};
+const ACCENT_GRADIENT = `linear-gradient(90deg, ${"#8e44ad"}, ${"#e67e22"})`;
+
+// AI risk score bands: above 75 is red, 35 to 75 is yellow, below 35 is green.
+function scoreTone(score) {
+  const n = Number(score) || 0;
+  if (n > 75) return { color: T.redDark, dot: T.red, bg: T.redTint, label: "High" };
+  if (n >= 35) return { color: T.amberDark, dot: T.amber, bg: T.amberTint, label: "Medium" };
+  return { color: T.green, dot: T.greenMid, bg: T.greenTint, label: "Low" };
+}
+const riskTone = { high: scoreTone(100), medium: scoreTone(50), low: scoreTone(0) };
+const SERIF = "Georgia, 'Times New Roman', serif";
+const SANS  = "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif";
+
+function btn(variant = "secondary", extra = {}) {
+  const base = { fontFamily: SANS, fontSize: 13, fontWeight: 600, borderRadius: 8, padding: "8px 14px", cursor: "pointer", whiteSpace: "nowrap", lineHeight: 1.2 };
+  const v = {
+    primary:   { background: T.ink, color: "#fff", border: `1px solid ${T.ink}` },
+    send:      { background: T.greenMid, color: "#fff", border: `1px solid ${T.greenMid}` },
+    log:       { background: T.purpleTint, color: "#6c3483", border: "1px solid #e2cdf0" },
+    draft:     { background: T.purple, color: "#fff", border: `1px solid ${T.purple}` },
+    remind:    { background: T.orangeTint, color: "#a85410", border: "1px solid #f6d3b0" },
+    secondary: { background: "#fff", color: T.ink, border: `1px solid ${T.line}` },
+    ghost:     { background: "transparent", color: T.muted, border: "1px solid transparent" },
+  }[variant];
+  return { ...base, ...v, ...extra };
+}
+
+const eyebrow = { margin: 0, fontSize: 12, fontWeight: 500, color: T.muted, letterSpacing: 0.2 };
+const panel   = { background: "#fff", border: `1px solid ${T.line}`, borderRadius: 12, overflow: "hidden" };
+// Panels get a thin purple or orange top edge (PulseRetain accent colors).
+const accentPanel = (color) => ({ ...panel, borderTop: `3px solid ${color}` });
+
+function Logo({ size = 26 }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 512 512" aria-hidden="true" style={{ flexShrink: 0 }}>
+      <rect width="512" height="512" rx="112" fill="#1a1a2e" />
+      <path d="M64 268 H170 L208 196 L268 332 L312 268 H372" fill="none" stroke="#e74c3c" strokeWidth="22" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M300 132 L236 290 H300 L276 392 L392 226 H320 L356 132 Z" fill="#e74c3c" />
+    </svg>
+  );
+}
+
+function RiskTag({ risk, score }) {
+  const tone = score !== undefined ? scoreTone(score) : (riskTone[risk] || riskTone.low);
+  return (
+    <span style={{ justifySelf: "start", display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12, fontWeight: 600, color: tone.color, background: tone.bg, padding: "3px 10px", borderRadius: 20, whiteSpace: "nowrap" }}>
+      <span style={{ width: 7, height: 7, borderRadius: "50%", background: tone.dot, flexShrink: 0 }} />
+      {score !== undefined ? tone.label : (riskConfig[risk]?.label || risk)}
+      {score !== undefined && <span style={{ fontWeight: 700 }}>{score}</span>}
+    </span>
+  );
+}
+
+function Bar({ pct, color = T.ink }) {
+  return (
+    <div style={{ height: 6, background: T.soft, borderRadius: 3, overflow: "hidden" }}>
+      <div style={{ width: `${Math.max(0, Math.min(100, pct))}%`, height: "100%", background: color, borderRadius: 3 }} />
+    </div>
+  );
+}
+
+function Stat({ label, value, sub, accent, tone, isMobile }) {
+  const t = accent ? "bad" : tone;
+  const c = t === "bad" ? { edge: T.red, bg: T.redTint, text: T.redDark }
+          : t === "good" ? { edge: T.greenMid, bg: T.greenTint, text: T.green }
+          : t === "mid" ? { edge: T.amber, bg: T.amberTint, text: T.amberDark }
+          : { edge: T.purple, bg: "#fff", text: T.ink };
+  return (
+    <div style={{ background: c.bg, border: `1px solid ${T.line}`, borderLeft: `3px solid ${c.edge}`, borderRadius: 10, padding: isMobile ? "10px 12px" : "12px 16px" }}>
+      <p style={eyebrow}>{label}</p>
+      <p style={{ margin: "4px 0 0", fontFamily: SERIF, fontSize: isMobile ? 22 : 26, color: c.text, lineHeight: 1.1 }}>{value}</p>
+      {sub && <p style={{ margin: "3px 0 0", fontSize: 12, color: T.muted }}>{sub}</p>}
+    </div>
+  );
+}
+
+function SectionHead({ title, sub, right, isMobile }) {
+  return (
+    <div style={{ display: "flex", justifyContent: "space-between", alignItems: isMobile ? "flex-start" : "flex-end", flexDirection: isMobile ? "column" : "row", gap: 12, marginBottom: 12 }}>
+      <div>
+        <h2 style={{ margin: 0, fontFamily: SERIF, fontSize: 20, fontWeight: 400, color: T.ink }}>{title}</h2>
+        {sub && <p style={{ margin: "4px 0 0", fontSize: 13, color: T.muted }}>{sub}</p>}
+      </div>
+      {right}
+    </div>
+  );
+}
+
+function Chevron({ open }) {
+  return (
+    <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true" style={{ transform: open ? "rotate(180deg)" : "none", transition: "transform 0.15s", color: T.faint }}>
+      <path d="M4 6l4 4 4-4" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
 }
 
 export default function App() {
@@ -395,7 +506,7 @@ export default function App() {
   const [aiResults, setAiResults]     = useState(() => (IS_DEMO ? demoInitialAiResults(initialMembers) : {}));
   const [loading, setLoading]         = useState({});
   const [analyzing, setAnalyzing]     = useState(false);
-  const [activeTab, setActiveTab]     = useState("Dashboard");
+  const [activeTab, setActiveTab]     = useState("Today");
   const [outreachLog, setOutreachLog] = useState(() => (IS_DEMO ? demoInitialOutreach() : []));
   const [filterRisk, setFilterRisk]   = useState("all");
   const [filterLocation, setFilterLocation] = useState(ALL_LOCATIONS); // multi-location: which site is in view
@@ -488,7 +599,7 @@ export default function App() {
 
   // ── Load competitive intelligence for the Competitors & Strategist tabs ────
   useEffect(() => {
-    if (activeTab !== "Competitors" && activeTab !== "Strategist") return;
+    if (activeTab !== "Insights") return;
     let cancelled = false;
     setIntelLoading(true);
     fetchCompetitiveIntel().then(data => {
@@ -511,7 +622,7 @@ export default function App() {
     const a = document.createElement("a");
     a.href = url; a.download = filename; a.click();
     URL.revokeObjectURL(url);
-    showToast(`⬇ Exported ${filename}`);
+    showToast(`Exported ${filename}`);
   }
 
   function exportMembersCSV() {
@@ -541,11 +652,11 @@ export default function App() {
     setFilterRisk("all");
     setSearch("");
     setShowData(false);
-    setActiveTab("Dashboard");
-    showToast(`✓ Loaded ${list.length} members${label ? ` · ${label}` : ""}`);
+    setActiveTab("Today");
+    showToast(`Loaded ${list.length} members${label ? ` · ${label}` : ""}`);
     saveRoster(list, "replace")
-      .then(ok => { if (!ok) showToast("Roster loaded, but the server can't save it yet — it will reset on reload"); })
-      .catch(err => showToast(`⚠ Roster loaded but not saved: ${err.message}`));
+      .then(ok => { if (!ok) showToast("Roster loaded, but the server can't save it yet. It will reset on reload."); })
+      .catch(err => showToast(`Roster loaded but not saved: ${err.message}`));
   }
 
   function loadSampleGym() {
@@ -554,7 +665,7 @@ export default function App() {
 
   function loadPastedRoster() {
     const list = parseMembersCSV(pasteText, Date.now());
-    if (!list.length) { showToast("No members found — include a header row with at least a Name column"); return; }
+    if (!list.length) { showToast("No members found. Include a header row with at least a Name column."); return; }
     applyRoster(list);
     setPasteText("");
   }
@@ -566,10 +677,10 @@ export default function App() {
     reader.onload = () => {
       try {
         const imported = parseMembersCSV(reader.result, Date.now());
-        if (!imported.length) { showToast("No members found — file needs at least a Name column"); return; }
+        if (!imported.length) { showToast("No members found. The file needs at least a Name column."); return; }
         applyRoster(imported, file.name);
       } catch {
-        showToast("Couldn't read that CSV — make sure it's a comma-separated export");
+        showToast("Couldn't read that CSV. Make sure it's a comma-separated export.");
       }
     };
     reader.readAsText(file);
@@ -593,15 +704,15 @@ export default function App() {
     if (startingFresh) { setAiResults({}); setSelected(null); }
     setUsingImported(true);
     setAddForm(blankMember);
-    showToast(`✓ Added ${added.name}`);
+    showToast(`Added ${added.name}`);
     saveRoster(startingFresh ? next : [added], startingFresh ? "replace" : "upsert")
-      .then(ok => { if (!ok) showToast("Member added, but the server can't save it yet — it will reset on reload"); })
-      .catch(err => showToast(`⚠ ${added.name} added but not saved: ${err.message}`));
+      .then(ok => { if (!ok) showToast("Member added, but the server can't save it yet. It will reset on reload."); })
+      .catch(err => showToast(`${added.name} added but not saved: ${err.message}`));
   }
 
   function resetToDemo() {
     if (!IS_DEMO && !window.confirm("Remove your saved roster and go back to the demo members? Saved analyses for these members are deleted too.")) return;
-    clearSavedRoster().catch(err => showToast(`⚠ Couldn't remove the saved roster: ${err.message}`));
+    clearSavedRoster().catch(err => showToast(`Couldn't remove the saved roster: ${err.message}`));
     setMembers(initialMembers);
     setUsingImported(false);
     setSelected(null);
@@ -635,7 +746,7 @@ export default function App() {
     } catch (err) {
       console.error("Failed to save outreach log:", err);
     }
-    showToast(`✓ Outreach logged for ${member.name.split(" ")[0]}`);
+    showToast(`Outreach logged for ${member.name.split(" ")[0]}`);
   }
 
   async function markStatus(logId, status) {
@@ -646,17 +757,17 @@ export default function App() {
     } catch (err) {
       console.error("Failed to update outreach status:", err);
     }
-    if (status === "recovered") showToast("🎉 Member marked as recovered!");
+    if (status === "recovered") showToast("Marked as won back");
   }
 
   function scheduleFollowUp(member, ai) {
     setScheduledIds(prev => new Set([...prev, member.id]));
-    showToast(`⏰ Follow-up scheduled in ${ai.followUpDays || 3} days for ${member.name.split(" ")[0]}`);
+    showToast(`Reminder set to follow up with ${member.name.split(" ")[0]} in ${ai.followUpDays || 3} days`);
   }
 
   async function handleSendSMS(member, ai) {
     if (!member.phone) {
-      showToast("❌ No phone number on file for " + member.name.split(" ")[0]);
+      showToast("No phone number on file for " + member.name.split(" ")[0]);
       return;
     }
     setSmsSending(prev => ({ ...prev, [member.id]: true }));
@@ -665,10 +776,10 @@ export default function App() {
       setSmsSent(prev => new Set([...prev, member.id]));
       await markOutreach(member, ai, true); // finish logging first so its toast doesn't replace this one
       showToast(res.simulated
-        ? `📱 Text to ${member.name.split(" ")[0]} logged (${IS_DEMO ? "demo" : "sample member"} — no real text sent)`
-        : `📱 SMS sent to ${member.name.split(" ")[0]}!`);
+        ? `Text to ${member.name.split(" ")[0]} logged (${IS_DEMO ? "demo" : "sample member"}, no real text sent)`
+        : `Text sent to ${member.name.split(" ")[0]}`);
     } catch (err) {
-      showToast(`❌ SMS failed: ${err.message}`);
+      showToast(`Text failed: ${err.message}`);
     }
     setSmsSending(prev => ({ ...prev, [member.id]: false }));
   }
@@ -706,16 +817,16 @@ export default function App() {
   async function sendReplySMS(member) {
     const draft = replyDrafts[member.id];
     if (!draft || draft.error) return;
-    if (!member.phone) { showToast("❌ No phone number on file for " + member.name.split(" ")[0]); return; }
+    if (!member.phone) { showToast("No phone number on file for " + member.name.split(" ")[0]); return; }
     setReplySending(prev => ({ ...prev, [member.id]: true }));
     try {
       const res = await sendRealSMS(member.phone, draft.reply);
       await recordReplyOnThread(member, draft.reply);
       showToast(res.simulated
-        ? `📱 Reply to ${member.name.split(" ")[0]} logged (${IS_DEMO ? "demo" : "sample member"} — no real text sent)`
-        : `📱 Reply sent to ${member.name.split(" ")[0]}!`);
+        ? `Reply to ${member.name.split(" ")[0]} logged (${IS_DEMO ? "demo" : "sample member"}, no real text sent)`
+        : `Reply sent to ${member.name.split(" ")[0]}`);
     } catch (err) {
-      showToast(`❌ Reply failed: ${err.message}`);
+      showToast(`Reply failed: ${err.message}`);
     }
     setReplySending(prev => ({ ...prev, [member.id]: false }));
   }
@@ -724,14 +835,14 @@ export default function App() {
     const draft = replyDrafts[member.id];
     if (!draft || draft.error) return;
     await recordReplyOnThread(member, draft.reply);
-    showToast(`✓ Reply approved & logged for ${member.name.split(" ")[0]}`);
+    showToast(`Reply logged for ${member.name.split(" ")[0]}`);
   }
 
   function copyReply(member) {
     const draft = replyDrafts[member.id];
     if (!draft || draft.error) return;
     if (navigator.clipboard) navigator.clipboard.writeText(draft.reply);
-    showToast("📋 Reply copied");
+    showToast("Reply copied");
   }
 
   // ── AI calls ───────────────────────────────────────────────────────────────
@@ -839,610 +950,449 @@ export default function App() {
   );
 
   // ══════════════════════════════════════════════════════════════════════════
+  const firstOf = (m) => m.name.split(" ")[0];
+  // "Usually Tue & Thu" reads fine, "Usually Every Saturday" doesn't.
+  const usually = (s) => (/^(mon|tue|wed|thu|fri|sat|sun)/i.test(s || "") ? s : String(s || "").toLowerCase());
+  const shortDate = (s) => {
+    const d = new Date(s);
+    return isNaN(d) ? s : d.toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+  };
+  const pad = isMobile ? "16px" : "32px";
+  const riskCounts = { all: scopedMembers.length, high: 0, medium: 0, low: 0 };
+  scopedMembers.forEach(m => { riskCounts[m.risk] = (riskCounts[m.risk] || 0) + 1; });
+  const statByLabel = Object.fromEntries(stats.map(s => [s.label, s.value]));
+  const todayLabel = new Date().toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" });
+  const outreachCounts = {
+    sent:      outreachLog.length,
+    responded: outreachLog.filter(o => ["responded", "recovered"].includes(o.status)).length,
+    recovered: outreachLog.filter(o => o.status === "recovered").length,
+    noReply:   outreachLog.filter(o => o.status === "no_response").length,
+  };
+
+  // Expanded detail under a member row: why they're at risk, the drafted text,
+  // and the reply helper. Kept as one function so the table stays readable.
+  function renderMemberDetail(m) {
+    const ai = aiResults[m.id];
+    const isLoading = loading[m.id];
+    const logged = outreachLog.find(o => o.memberId === m.id);
+    const scheduled = scheduledIds.has(m.id);
+    const wrap = { padding: isMobile ? "16px" : "20px 24px 24px", background: T.page, borderBottom: `1px solid ${T.line}` };
+
+    if (isLoading) return <div style={wrap}><p style={{ margin: 0, fontSize: 13, color: T.muted }}>Analyzing {firstOf(m)}…</p></div>;
+    if (ai && ai.error) return (
+      <div style={wrap}>
+        <p style={{ margin: "0 0 10px", fontSize: 13, color: T.redDark }}>{ai.error}</p>
+        <button onClick={() => analyzeOne(m)} style={btn("secondary")}>Try again</button>
+      </div>
+    );
+    if (!ai) return (
+      <div style={{ ...wrap, display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap" }}>
+        <p style={{ margin: 0, fontSize: 13, color: T.muted }}>No analysis yet for {firstOf(m)}.</p>
+        <button onClick={() => analyzeOne(m)} style={btn("draft")}>Analyze {firstOf(m)}</button>
+        <button onClick={() => setModalMember(m)} style={btn("ghost")}>Contact details</button>
+      </div>
+    );
+
+    const d = replyDrafts[m.id];
+    const sentimentColor = { positive: T.green, hesitant: T.amber, leaving: T.redDark }[d?.sentiment] || T.muted;
+    return (
+      <div style={wrap}>
+        <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1.3fr", gap: isMobile ? 20 : 40 }}>
+          <div>
+            <p style={eyebrow}>Why {firstOf(m)} is at risk</p>
+            <p style={{ margin: "6px 0 16px", fontSize: 14, color: T.body, lineHeight: 1.6 }}>{ai.reason}</p>
+            <div style={{ display: "flex", gap: 32, flexWrap: "wrap" }}>
+              <div><p style={eyebrow}>Risk score</p><p style={{ margin: "4px 0 0", fontSize: 15, color: T.ink }}>{ai.score} / 100</p></div>
+              {ai.offerType && offerLabels[ai.offerType] && (
+                <div><p style={eyebrow}>Suggested offer</p><p style={{ margin: "4px 0 0", fontSize: 15, color: T.ink }}>{offerLabels[ai.offerType]}</p></div>
+              )}
+              <div><p style={eyebrow}>Follow up</p><p style={{ margin: "4px 0 0", fontSize: 15, color: T.ink }}>after {ai.followUpDays || 3} days</p></div>
+            </div>
+          </div>
+          <div>
+            <p style={eyebrow}>Suggested text</p>
+            <p style={{ margin: "6px 0 14px", fontSize: 14, color: T.body, lineHeight: 1.6, background: "#fff", border: `1px solid ${T.line}`, borderRadius: 10, padding: "12px 14px" }}>{ai.message}</p>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+              {!smsSent.has(m.id) ? (
+                <button onClick={() => handleSendSMS(m, ai)} disabled={smsSending[m.id]} style={btn("send", smsSending[m.id] ? { opacity: 0.5, cursor: "not-allowed" } : {})}>{smsSending[m.id] ? "Sending…" : "Send text"}</button>
+              ) : (
+                <span style={{ fontSize: 13, fontWeight: 600, color: T.green, background: T.greenTint, padding: "6px 12px", borderRadius: 8 }}>Texted {m.phone}</span>
+              )}
+              {!logged && <button onClick={() => markOutreach(m, ai)} style={btn("log")}>Log as sent</button>}
+              {!scheduled && <button onClick={() => scheduleFollowUp(m, ai)} style={btn("remind")}>Remind me in {ai.followUpDays || 3} days</button>}
+              <button onClick={() => setModalMember(m)} style={btn("ghost")}>Contact details</button>
+            </div>
+            {logged && <p style={{ margin: "10px 0 0", fontSize: 12, color: T.faint }}>Logged {logged.sentAt}</p>}
+          </div>
+        </div>
+
+        {/* Member replied? Draft the next text */}
+        <div style={{ marginTop: 22, paddingTop: 20, borderTop: `1px solid ${T.line}` }}>
+          <p style={{ ...eyebrow, color: T.ink, fontWeight: 600, fontSize: 13 }}>Did {firstOf(m)} reply?</p>
+          <p style={{ margin: "2px 0 12px", fontSize: 13, color: T.muted }}>Paste their reply and we'll draft your response.</p>
+
+          {(convs[m.id] || []).length > 0 && (
+            <div role="log" aria-label={`Conversation with ${m.name}`} style={{ maxHeight: 240, overflowY: "auto", marginBottom: 12, padding: "12px 14px", background: "#fff", border: `1px solid ${T.line}`, borderRadius: 10, display: "flex", flexDirection: "column", gap: 8 }}>
+              {convs[m.id].map((t, i) => (
+                <div key={i} style={{ alignSelf: t.role === "member" ? "flex-end" : "flex-start", maxWidth: "80%" }}>
+                  <p style={{ margin: "0 0 3px", fontSize: 11, color: T.faint, textAlign: t.role === "member" ? "right" : "left" }}>{t.role === "member" ? firstOf(m) : "Studio"}</p>
+                  <div style={{ background: t.role === "member" ? T.soft : "#eef0f6", borderRadius: 10, padding: "8px 12px", fontSize: 13, color: T.body, lineHeight: 1.5 }}>{t.text}</div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <textarea
+            value={replyText[m.id] || ""}
+            onChange={e => setReplyText(prev => ({ ...prev, [m.id]: e.target.value }))}
+            placeholder={`e.g. "Honestly it's just gotten too expensive for me right now."`}
+            aria-label={`Reply received from ${m.name}`}
+            rows={2}
+            style={{ width: "100%", boxSizing: "border-box", border: `1px solid ${T.line}`, borderRadius: 10, padding: "10px 12px", fontSize: 14, fontFamily: SANS, resize: "vertical", outline: "none", background: "#fff", color: T.body }}
+          />
+          <button onClick={() => draftReply(m, ai)} disabled={replyLoading[m.id]} style={btn("draft", { marginTop: 8, ...(replyLoading[m.id] ? { opacity: 0.5, cursor: "not-allowed" } : {}) })}>
+            {replyLoading[m.id] ? "Drafting…" : "Draft a reply"}
+          </button>
+
+          {d && d.error && <p style={{ margin: "10px 0 0", fontSize: 13, color: T.redDark }}>{d.error}</p>}
+          {d && !d.error && (
+            <div style={{ marginTop: 14, background: "#fff", border: `1px solid ${T.line}`, borderRadius: 10, padding: "14px 16px" }}>
+              <div style={{ display: "flex", gap: 18, flexWrap: "wrap", marginBottom: 10, fontSize: 13 }}>
+                <span style={{ color: T.muted }}>Tone: <span style={{ color: sentimentColor, textTransform: "capitalize" }}>{d.sentiment || "reply"}</span></span>
+                {d.suggestedOffer && offerLabels[d.suggestedOffer] && <span style={{ color: T.muted }}>Offer: <span style={{ color: T.ink }}>{offerLabels[d.suggestedOffer]}</span></span>}
+              </div>
+              {d.escalate && <p style={{ margin: "0 0 10px", fontSize: 13, color: T.redDark }}>We recommend you handle this one personally.</p>}
+              <p style={{ margin: 0, fontSize: 14, color: T.body, lineHeight: 1.6 }}>{d.reply}</p>
+              {d.nextStep && <p style={{ margin: "10px 0 0", fontSize: 13, color: T.muted }}>Next step: {d.nextStep}</p>}
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 12 }}>
+                <button onClick={() => sendReplySMS(m)} disabled={replySending[m.id]} style={btn("send", replySending[m.id] ? { opacity: 0.5, cursor: "not-allowed" } : {})}>{replySending[m.id] ? "Sending…" : "Send reply"}</button>
+                <button onClick={() => approveReplyNoSMS(m)} aria-label="Approve and log reply without sending SMS" style={btn("log")}>Log as sent</button>
+                <button onClick={() => copyReply(m)} aria-label="Copy drafted reply" style={btn("ghost")}>Copy</button>
+                <button onClick={() => draftReply(m, ai)} aria-label="Redraft reply" style={btn("ghost")}>Redraft</button>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
   return (
     <>
     <ThemeProvider theme={pulseTheme}>
     <div className="pulse-auth-bg" style={{ minHeight: "100vh", background: "linear-gradient(165deg,#15152b 0%,#1a1a2e 45%,#262652 100%)" }}>
     <AuthGate>
       {({ signOut, user }) => (
-        <div style={{ minHeight: "100vh", background: "#f5f6fa", fontFamily: "'Georgia', serif" }}>
+        <div style={{ minHeight: "100vh", background: T.page, fontFamily: SANS, color: T.body }}>
 
           {/* ── Loading screen ── */}
           {dataLoading && (
-            <div style={{ position: "fixed", inset: 0, background: "#1a1a2e", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", zIndex: 9999 }}>
-              <div style={{ width: 40, height: 40, borderRadius: 10, background: "linear-gradient(135deg,#e74c3c,#c0392b)", display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 16 }}>
-                <span style={{ color: "#fff", fontSize: 20 }}>⚡</span>
-              </div>
-              <p style={{ color: "#fff", fontSize: 18, fontWeight: 700, margin: "0 0 6px" }}>PulseRetain</p>
-              <p style={{ color: "#aaa", fontSize: 13, margin: 0 }}>Loading your member data...</p>
+            <div style={{ position: "fixed", inset: 0, background: "#fff", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 14, zIndex: 9999 }}>
+              <Logo size={40} />
+              <p style={{ margin: 0, fontSize: 14, color: T.muted }}>Loading your members…</p>
             </div>
           )}
 
           {/* ── Header ── */}
-          <div style={{ background: "#1a1a2e", padding: isMobile ? "8px 12px" : "0 32px", display: "flex", flexDirection: isMobile ? "column" : "row", alignItems: "center", justifyContent: "space-between", gap: isMobile ? 8 : 0, height: isMobile ? "auto" : 56, position: "sticky", top: 0, zIndex: 100 }}>
-            {/* Logo (+ sign-out on mobile's top row) */}
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", width: isMobile ? "100%" : "auto", gap: 10 }}>
+          <header style={{ background: "#fff", borderBottom: `1px solid ${T.line}`, position: "sticky", top: 0, zIndex: 100 }}>
+            <div style={{ maxWidth: 1120, margin: "0 auto", padding: `0 ${pad}`, display: "flex", alignItems: "center", gap: isMobile ? 12 : 40, height: 60 }}>
               <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                <div style={{ width: 28, height: 28, borderRadius: 6, background: "linear-gradient(135deg,#e74c3c,#c0392b)", display: "flex", alignItems: "center", justifyContent: "center" }}>
-                  <span style={{ color: "#fff", fontSize: 14 }}>⚡</span>
-                </div>
-                <span style={{ color: "#fff", fontWeight: 700, fontSize: 16, letterSpacing: 0.5 }}>PulseRetain</span>
+                <Logo size={26} />
+                <span style={{ fontFamily: SERIF, fontSize: 18, color: T.ink }}>PulseRetain</span>
               </div>
-              {isMobile && (
-                <button onClick={signOut} style={{ background: "transparent", border: "1px solid #444", color: "#ccc", padding: "5px 12px", borderRadius: 6, cursor: "pointer", fontSize: 12 }}>{IS_DEMO ? "Sign up" : "Sign out"}</button>
+              {!isMobile && (
+                <nav style={{ display: "flex", gap: 28, height: "100%" }}>
+                  {TABS.map(tab => (
+                    <button key={tab} onClick={() => setActiveTab(tab)} aria-current={activeTab === tab ? "page" : undefined}
+                      style={{ background: "none", border: "none", borderBottom: `2px solid ${activeTab === tab ? T.ink : "transparent"}`, padding: "0 2px", height: "100%", cursor: "pointer", fontFamily: SANS, fontSize: 14, fontWeight: activeTab === tab ? 600 : 400, color: activeTab === tab ? T.ink : T.muted }}>
+                      {tab}
+                    </button>
+                  ))}
+                </nav>
               )}
-            </div>
-
-            {/* ── Nav tabs (horizontally scrollable on mobile) ── */}
-            <div style={{ display: "flex", gap: 4, ...(isMobile ? { width: "100%", overflowX: "auto", WebkitOverflowScrolling: "touch", paddingBottom: 2 } : {}) }}>
-              {TABS.map(tab => (
-                <button
-                  key={tab}
-                  onClick={(e) => { setActiveTab(tab); if (isMobile && e.currentTarget.scrollIntoView) e.currentTarget.scrollIntoView({ inline: "nearest", block: "nearest" }); }}
-                  style={{
-                    background: activeTab === tab ? "rgba(231,76,60,0.2)" : "transparent",
-                    border: "none", color: activeTab === tab ? "#e74c3c" : "#aaa",
-                    padding: isMobile ? "6px 11px" : "6px 16px", borderRadius: 6, cursor: "pointer",
-                    fontSize: 13, fontWeight: activeTab === tab ? 700 : 400,
-                    transition: "all 0.15s", whiteSpace: "nowrap", flexShrink: 0,
-                  }}
-                >{tab}</button>
-              ))}
-            </div>
-
-            {!isMobile && (
-              <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
-                <span style={{ color: "#aaa", fontSize: 13 }}>{user?.signInDetails?.loginId}</span>
-                <button onClick={signOut} style={{ background: "transparent", border: "1px solid #444", color: "#ccc", padding: "5px 14px", borderRadius: 6, cursor: "pointer", fontSize: 12 }}>{IS_DEMO ? "Sign up" : "Sign out"}</button>
+              <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 14 }}>
+                {!isMobile && <span style={{ fontSize: 13, color: T.faint }}>{user?.signInDetails?.loginId}</span>}
+                <button onClick={signOut} style={btn("secondary", { padding: "6px 12px", fontWeight: 500 })}>{IS_DEMO ? "Sign up" : "Sign out"}</button>
               </div>
+            </div>
+            {isMobile && (
+              <nav style={{ display: "flex", borderTop: `1px solid ${T.line}` }}>
+                {TABS.map(tab => (
+                  <button key={tab} onClick={() => setActiveTab(tab)} aria-current={activeTab === tab ? "page" : undefined}
+                    style={{ flex: 1, background: "none", border: "none", borderBottom: `2px solid ${activeTab === tab ? T.ink : "transparent"}`, padding: "11px 0", cursor: "pointer", fontFamily: SANS, fontSize: 14, fontWeight: activeTab === tab ? 600 : 400, color: activeTab === tab ? T.ink : T.muted }}>
+                    {tab}
+                  </button>
+                ))}
+              </nav>
             )}
-          </div>
+            <div style={{ height: 3, background: ACCENT_GRADIENT }} />
+          </header>
 
-          {/* ── Demo banner (public no-login demo from the poster QR code) ── */}
+          {/* ── Demo note (public no-login demo) ── */}
           {IS_DEMO && (
-            <div role="note" style={{ background: "#fff4e5", borderBottom: "1px solid #f5d29a", color: "#7a4b00", padding: isMobile ? "9px 12px" : "10px 32px", display: "flex", alignItems: "center", justifyContent: "center", flexWrap: "wrap", gap: isMobile ? 8 : 14, fontSize: 13, lineHeight: 1.4, textAlign: "center" }}>
-              <span>👋 <b>You're exploring a demo gym</b> with sample members. No texts are sent.</span>
-              <button onClick={exitDemoToSignUp} style={{ background: "#1a1a2e", color: "#fff", border: "none", borderRadius: 8, padding: "6px 14px", fontSize: 12, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap" }}>Sign up to use your own members →</button>
+            <div role="note" style={{ background: T.soft, borderBottom: `1px solid ${T.line}`, padding: `9px ${pad}`, fontSize: 13, color: T.muted, textAlign: "center", lineHeight: 1.5 }}>
+              You're viewing a demo gym with sample members. No texts are sent.{" "}
+              <button onClick={exitDemoToSignUp} style={{ background: "none", border: "none", padding: 0, fontFamily: SANS, fontSize: 13, color: T.ink, fontWeight: 600, textDecoration: "underline", cursor: "pointer" }}>Sign up to use your own members</button>
             </div>
           )}
 
           {/* ── Toast ── */}
           {toast && (
-            <div role="status" aria-live="polite" style={{ position: "fixed", bottom: 28, left: "50%", transform: "translateX(-50%)", background: "#1a1a2e", color: "#fff", padding: "10px 22px", borderRadius: 10, fontSize: 13, fontWeight: 600, zIndex: 9999, boxShadow: "0 4px 20px rgba(0,0,0,0.3)", width: "max-content", maxWidth: "calc(100vw - 32px)", boxSizing: "border-box", textAlign: "center" }}>
+            <div role="status" aria-live="polite" style={{ position: "fixed", bottom: 28, left: "50%", transform: "translateX(-50%)", background: T.ink, color: "#fff", padding: "10px 18px", borderRadius: 8, fontSize: 13, zIndex: 9999, width: "max-content", maxWidth: "calc(100vw - 32px)", boxSizing: "border-box", textAlign: "center" }}>
               {toast}
             </div>
           )}
 
-          <div style={{ maxWidth: 1100, margin: "0 auto", padding: isMobile ? "18px 12px" : "32px 24px" }}>
+          <main style={{ maxWidth: 1120, margin: "0 auto", padding: isMobile ? "18px 16px 40px" : "28px 32px 48px" }}>
 
             {/* ════════════════════════════════════════════════════════════
-                TAB: DASHBOARD
+                TAB: TODAY  (revenue at risk → who to text → everyone else)
             ════════════════════════════════════════════════════════════ */}
-            {activeTab === "Dashboard" && (
+            {activeTab === "Today" && (
               <>
-                {/* Title + AI button */}
-                <div style={{ marginBottom: isMobile ? 18 : 28, display: "flex", flexDirection: "row", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: isMobile ? 12 : 16 }}>
-                  <div>
-                    <h1 style={{ margin: 0, fontSize: isMobile ? 21 : 26, fontWeight: 700, color: "#1a1a2e" }}>Member Retention Dashboard</h1>
-                    <p style={{ margin: "4px 0 0", color: "#888", fontSize: 14 }}>
-                      {usingImported ? "Your imported roster" : "Pulse Studio"} · {scopedMembers.length} {filterLocation === ALL_LOCATIONS ? "active members" : `members at ${filterLocation}`}
-                      {usingImported && (
-                        <button onClick={resetToDemo} style={{ marginLeft: 10, background: "none", border: "none", color: "#185fa5", fontSize: 12, cursor: "pointer", textDecoration: "underline", padding: 0 }}>↺ reset to demo</button>
-                      )}
+                {/* Page title + location picker */}
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap", marginBottom: isMobile ? 14 : 18 }}>
+                  <p style={{ margin: 0, fontSize: 13, color: T.muted }}>
+                    {todayLabel} · {usingImported ? "Your roster" : "Pulse Studio"} · {scopedMembers.length} members{filterLocation !== ALL_LOCATIONS ? ` at ${filterLocation}` : ""}
+                    {usingImported && <button onClick={resetToDemo} style={{ marginLeft: 10, background: "none", border: "none", color: T.muted, fontSize: 13, cursor: "pointer", textDecoration: "underline", padding: 0 }}>Reset to demo</button>}
+                  </p>
+                  {locations.length > 1 && (
+                    <select value={filterLocation} onChange={e => setFilterLocation(e.target.value)} aria-label="Filter members by location"
+                      style={{ padding: "7px 10px", borderRadius: 8, border: `1px solid ${T.line}`, background: "#fff", fontFamily: SANS, fontSize: 13, color: T.ink, cursor: "pointer" }}>
+                      <option value={ALL_LOCATIONS}>All locations</option>
+                      {locations.map(loc => <option key={loc} value={loc}>{loc}</option>)}
+                    </select>
+                  )}
+                </div>
+
+                {/* Headline: revenue at risk */}
+                <section style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1.25fr 1fr", gap: isMobile ? 14 : 20, alignItems: "stretch", marginBottom: isMobile ? 24 : 32 }}>
+                  <div style={{ background: "#fff", border: `1px solid ${T.line}`, borderLeft: `4px solid ${T.red}`, borderRadius: 12, padding: isMobile ? "18px 16px" : "22px 26px" }}>
+                    <p style={{ ...eyebrow, fontSize: 14 }}>Revenue at risk</p>
+                    <p style={{ margin: "8px 0 0", fontFamily: SERIF, fontSize: isMobile ? 44 : 56, lineHeight: 1, color: insights.revenueAtRisk > 0 ? T.redDark : T.ink }}>
+                      ${insights.revenueAtRisk.toLocaleString()}<span style={{ fontSize: isMobile ? 18 : 22, color: T.muted }}> /month</span>
+                    </p>
+                    <p style={{ margin: "12px 0 0", fontSize: 15, color: T.body, lineHeight: 1.55, maxWidth: 520 }}>
+                      {insights.atRisk > 0
+                        ? <>That's <strong style={{ color: T.ink }}>${insights.projectedAnnual.toLocaleString()} a year</strong> from {insights.atRisk} member{insights.atRisk !== 1 ? "s" : ""} who are likely to cancel. Start with the people below.</>
+                        : "No members are at high risk right now."}
                     </p>
                   </div>
-                  <div style={{ display: "flex", gap: isMobile ? 8 : 10, alignItems: "center", flexWrap: "wrap" }}>
-                    {/* Search */}
-                    <input
-                      type="text"
-                      value={search}
-                      onChange={e => setSearch(e.target.value)}
-                      placeholder="Search members…"
-                      aria-label="Search members by name"
-                      style={{ padding: "8px 12px", borderRadius: 20, border: "1px solid #ddd", fontSize: isMobile ? 16 : 12, outline: "none", minWidth: 150, ...(isMobile ? { flex: "1 1 100%", boxSizing: "border-box" } : {}) }}
-                    />
-                    {/* Location filter — shown only when the owner has more than one site */}
-                    {locations.length > 1 && (
-                      <select
-                        value={filterLocation}
-                        onChange={e => setFilterLocation(e.target.value)}
-                        aria-label="Filter members by location"
-                        style={{
-                          padding: "8px 12px", borderRadius: 20, fontSize: 12, outline: "none", cursor: "pointer", fontFamily: "inherit",
-                          border: filterLocation === ALL_LOCATIONS ? "1px solid #ddd" : "1px solid #1a1a2e",
-                          background: filterLocation === ALL_LOCATIONS ? "#fff" : "#1a1a2e",
-                          color: filterLocation === ALL_LOCATIONS ? "#555" : "#fff",
-                          fontWeight: filterLocation === ALL_LOCATIONS ? 400 : 700,
-                        }}
-                      >
-                        <option value={ALL_LOCATIONS}>📍 All locations</option>
-                        {locations.map(loc => <option key={loc} value={loc}>{loc}</option>)}
-                      </select>
-                    )}
-                    {/* Filter pills */}
-                    {["all","high","medium","low"].map(f => (
-                      <button
-                        key={f}
-                        onClick={() => setFilterRisk(f)}
-                        aria-label={`Filter members by ${f === "all" ? "all" : f} risk`}
-                        aria-pressed={filterRisk === f}
-                        style={{
-                          padding: "7px 14px", borderRadius: 20, fontSize: 12, cursor: "pointer",
-                          border: filterRisk === f ? "none" : "1px solid #ddd",
-                          background: filterRisk === f
-                            ? (f === "all" ? "#1a1a2e" : f === "high" ? "#e74c3c" : f === "medium" ? "#f39c12" : "#27ae60")
-                            : "#fff",
-                          color: filterRisk === f ? "#fff" : "#555",
-                          fontWeight: filterRisk === f ? 700 : 400,
-                          textTransform: "capitalize",
-                        }}
-                      >{f === "all" ? "All" : f}</button>
-                    ))}
-                    <button
-                      onClick={analyzeAll}
-                      disabled={analyzing}
-                      style={{
-                        background: analyzing ? "#ccc" : "linear-gradient(135deg,#e74c3c,#c0392b)",
-                        color: "#fff", border: "none", borderRadius: 10, padding: "10px 20px",
-                        fontSize: 13, fontWeight: 700, cursor: analyzing ? "not-allowed" : "pointer",
-                        boxShadow: analyzing ? "none" : "0 4px 14px rgba(231,76,60,0.35)",
-                        whiteSpace: "nowrap", ...(isMobile ? { flex: "1 1 auto" } : {}),
-                      }}
-                    >{analyzing ? "⏳ Analyzing..." : "⚡ Run AI Analysis"}</button>
-                    <button
-                      onClick={exportMembersCSV}
-                      aria-label="Export member list as CSV"
-                      style={{ background: "#fff", color: "#1a1a2e", border: "1px solid #ddd", borderRadius: 10, padding: "10px 16px", fontSize: 13, fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap", ...(isMobile ? { flex: "1 1 auto" } : {}) }}
-                    >⬇ Export CSV</button>
-                    <button
-                      onClick={() => setShowData(true)}
-                      aria-label="Add or import your gym's members"
-                      style={{ background: "#1a1a2e", color: "#fff", border: "none", borderRadius: 10, padding: "10px 16px", fontSize: 13, fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap", ...(isMobile ? { flex: "1 1 auto" } : {}) }}
-                    >➕ Add Members</button>
+                  <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr 1fr" : "1fr 1fr", gap: 12 }}>
+                    <Stat isMobile={isMobile} tone="good" label="Members won back" value={statByLabel["Members Recovered"]} sub="this month" />
+                    <Stat isMobile={isMobile} tone="good" label="Revenue saved" value={statByLabel["Revenue Saved"]} sub="per year" />
+                    <Stat isMobile={isMobile} tone="good" label="Reply rate" value={statByLabel["Avg Response Rate"]} sub={`${outreachLog.length} texts sent`} />
+                    <Stat isMobile={isMobile} accent label="Members at risk" value={insights.atRisk} sub="high risk right now" />
                   </div>
-                </div>
+                </section>
 
-                {/* ── Locations overview (who is where) — tap a card to filter ── */}
-                {locations.length > 1 && (
-                  <div style={{ marginBottom: isMobile ? 18 : 28 }}>
-                    <p style={{ margin: "0 0 10px", fontSize: 13, fontWeight: 600, color: "#888" }}>Your locations · {isMobile ? "swipe, tap to filter" : "tap to filter"}</p>
-                    <div style={isMobile
-                      ? { display: "flex", gap: 10, overflowX: "auto", WebkitOverflowScrolling: "touch", margin: "0 -12px", padding: "2px 12px 6px", scrollSnapType: "x proximity" }
-                      : { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 12 }}>
-                      {[{ location: ALL_LOCATIONS, total: members.length, high: members.filter(m => m.risk === "high").length, revenue: members.reduce((a, m) => a + (m.value || 0), 0) }, ...locationSummary].map(loc => {
-                        const isAll  = loc.location === ALL_LOCATIONS;
-                        const active = filterLocation === loc.location;
-                        return (
-                          <button
-                            key={loc.location}
-                            onClick={() => setFilterLocation(loc.location)}
-                            aria-pressed={active}
-                            style={{ textAlign: "left", cursor: "pointer", fontFamily: "inherit", borderRadius: 12, padding: isMobile ? "11px 14px" : "14px 16px", ...(isMobile ? { flex: "0 0 auto", minWidth: 148, scrollSnapAlign: "start" } : {}), boxShadow: "0 1px 4px rgba(0,0,0,0.06)", background: active ? "#1a1a2e" : "#fff", color: active ? "#fff" : "#1a1a2e", border: active ? "2px solid #1a1a2e" : "1px solid #eee" }}
-                          >
-                            <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 14, fontWeight: 700 }}>
-                              <span>{isAll ? "🏢" : "📍"}</span>{isAll ? "All locations" : loc.location}
-                            </div>
-                            <div style={{ fontSize: 12, marginTop: 6, color: active ? "#cfcfe6" : "#888" }}>
-                              {loc.total} member{loc.total !== 1 ? "s" : ""} · <span style={{ fontWeight: 600, color: loc.high > 0 ? (active ? "#ff9a8d" : "#c0392b") : (active ? "#cfcfe6" : "#888") }}>{loc.high} high-risk</span>
-                            </div>
-                            <div style={{ fontSize: 12, marginTop: 2, color: active ? "#9fb0d6" : "#aaa" }}>${loc.revenue.toLocaleString()}/mo</div>
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </div>
-                )}
-
-                {/* ── Today's Priorities (the daily action queue) ── */}
-                <div style={{ background: "linear-gradient(135deg,#1a1a2e,#23234a)", borderRadius: 16, padding: isMobile ? "16px 12px" : "20px 24px", marginBottom: isMobile ? 20 : 28, boxShadow: "0 4px 18px rgba(26,26,46,0.18)" }}>
-                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10, marginBottom: todaysQueue.length ? 16 : 0 }}>
-                    <div>
-                      <h2 style={{ margin: 0, fontSize: 17, fontWeight: 700, color: "#fff" }}>☀️ Today's Priorities</h2>
-                      <p style={{ margin: "2px 0 0", fontSize: 13, color: "#b9b9d6" }}>
-                        {todaysQueue.length
-                          ? `${todaysQueue.length} member${todaysQueue.length !== 1 ? "s" : ""} to win back today — highest revenue at risk first.`
-                          : "You're all caught up — no at-risk members need outreach right now. 🎉"}
-                      </p>
-                    </div>
-                    {todaysQueue.some(m => !aiResults[m.id]) && (
-                      <button onClick={prepTodaysQueue} disabled={analyzing} style={{ background: analyzing ? "#555" : "linear-gradient(135deg,#e74c3c,#c0392b)", color: "#fff", border: "none", borderRadius: 10, padding: "9px 18px", fontSize: 13, fontWeight: 700, cursor: analyzing ? "not-allowed" : "pointer", whiteSpace: "nowrap" }}>
-                        {analyzing ? "⏳ Prepping..." : "⚡ Prep all win-backs"}
-                      </button>
-                    )}
-                  </div>
-
-                  {todaysQueue.length > 0 && (
-                    <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "repeat(auto-fit, minmax(280px, 1fr))", gap: 12 }}>
-                      {todaysQueue.map(m => {
-                        const rc = riskConfig[deriveRisk(m, aiResults[m.id])];
-                        const ai = aiResults[m.id];
-                        const isLoading = loading[m.id];
-                        return (
-                          <div key={m.id} style={{ background: "#fff", borderRadius: 12, padding: "14px 16px", display: "flex", flexDirection: "column" }}>
-                            <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
-                              <div style={{ width: 36, height: 36, borderRadius: "50%", background: rc.bg, color: rc.color, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, fontWeight: 700, flexShrink: 0, border: `1.5px solid ${rc.border}` }}>{m.initials}</div>
-                              <div style={{ minWidth: 0 }}>
-                                <p style={{ margin: 0, fontSize: 14, fontWeight: 700, color: "#1a1a2e", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{m.name}</p>
-                                <p style={{ margin: 0, fontSize: 11, color: "#888" }}>{m.lastVisit} · ${m.value}/mo at risk{m.missedPayments > 0 ? ` · ${m.missedPayments} missed` : ""}</p>
-                              </div>
-                            </div>
-
+                {/* Reach out today */}
+                <section style={{ marginBottom: isMobile ? 28 : 32 }}>
+                  <SectionHead isMobile={isMobile}
+                    title="Reach out today"
+                    sub={todaysQueue.length ? "Highest revenue at risk first. Review the text, then send it." : undefined}
+                    right={todaysQueue.some(m => !aiResults[m.id]) && (
+                      <button onClick={prepTodaysQueue} disabled={analyzing} style={btn("draft", analyzing ? { opacity: 0.5, cursor: "not-allowed" } : {})}>{analyzing ? "Drafting…" : "Draft all messages"}</button>
+                    )} />
+                  <div style={accentPanel(T.purple)}>
+                    {todaysQueue.length === 0 ? (
+                      <p style={{ margin: 0, padding: "32px 24px", fontSize: 14, color: T.muted, textAlign: "center" }}>You're all caught up. Nobody needs a message today.</p>
+                    ) : todaysQueue.map((m, idx) => {
+                      const ai = aiResults[m.id];
+                      const ready = ai && !ai.error;
+                      const isLoading = loading[m.id];
+                      return (
+                        <div key={m.id} style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "230px 1fr auto", gap: isMobile ? 14 : 32, padding: isMobile ? "14px 16px" : "16px 24px", borderTop: idx ? `1px solid ${T.line}` : "none", alignItems: "start" }}>
+                          <div>
+                            <p style={{ margin: 0, fontSize: 15, fontWeight: 600, color: T.ink }}>{m.name}</p>
+                            <p style={{ margin: "4px 0 0", fontSize: 13, color: T.muted }}>Last visit {m.lastVisit.toLowerCase()}</p>
+                            <p style={{ margin: "2px 0 0", fontSize: 13, color: T.muted }}>Usually {usually(m.usualVisits)}</p>
+                            <p style={{ margin: "10px 0 0", fontFamily: SERIF, fontSize: 19, color: T.redDark }}>${m.value}<span style={{ fontFamily: SANS, fontSize: 12, color: T.muted }}> /mo at risk</span></p>
+                            {m.missedPayments > 0 && <p style={{ margin: "2px 0 0", fontSize: 12, color: T.muted }}>{m.missedPayments} missed payment{m.missedPayments !== 1 ? "s" : ""}</p>}
+                          </div>
+                          <div>
                             {isLoading ? (
-                              <p style={{ margin: "4px 0 8px", fontSize: 12, color: "#f39c12" }}>⏳ Claude is writing the win-back…</p>
-                            ) : ai && !ai.error ? (
+                              <p style={{ margin: 0, fontSize: 14, color: T.muted }}>Writing a message…</p>
+                            ) : ready ? (
                               <>
-                                <p style={{ margin: "0 0 10px", fontSize: 12, color: "#444", lineHeight: 1.5, fontStyle: "italic", background: "#fafbff", borderRadius: 8, padding: "8px 10px" }}>"{ai.message}"</p>
-                                <div style={{ display: "flex", gap: 6, marginTop: "auto" }}>
-                                  {!smsSent.has(m.id) && (
-                                    <button onClick={() => handleSendSMS(m, ai)} disabled={smsSending[m.id]} style={{ flex: 1, background: smsSending[m.id] ? "#ccc" : "linear-gradient(135deg,#27ae60,#1e7e45)", color: "#fff", border: "none", borderRadius: 8, padding: "8px 0", fontSize: 12, fontWeight: 700, cursor: smsSending[m.id] ? "not-allowed" : "pointer" }}>{smsSending[m.id] ? "⏳" : "📱 Send"}</button>
-                                  )}
-                                  <button onClick={() => markOutreach(m, ai)} style={{ flex: 1, background: "#e8f4fd", color: "#185fa5", border: "1px solid #b3d9f5", borderRadius: 8, padding: "8px 0", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>✓ Approve & Log</button>
-                                  <button onClick={() => skipForToday(m)} aria-label={`Skip ${m.name} for today`} style={{ background: "#f5f5f5", color: "#888", border: "1px solid #e0e0e0", borderRadius: 8, padding: "8px 10px", fontSize: 12, cursor: "pointer" }}>Skip</button>
-                                </div>
+                                <p style={eyebrow}>Suggested text</p>
+                                <p style={{ margin: "6px 0 0", fontSize: 14, color: T.body, lineHeight: 1.55, background: T.page, borderLeft: `3px solid ${T.purple}`, borderRadius: 6, padding: "8px 12px" }}>{ai.message}</p>
                               </>
                             ) : (
-                              <div style={{ display: "flex", gap: 6, marginTop: "auto" }}>
-                                <button onClick={() => analyzeOne(m)} style={{ flex: 1, background: "linear-gradient(135deg,#e74c3c,#c0392b)", color: "#fff", border: "none", borderRadius: 8, padding: "8px 0", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>⚡ Prep win-back</button>
-                                <button onClick={() => skipForToday(m)} aria-label={`Skip ${m.name} for today`} style={{ background: "#f5f5f5", color: "#888", border: "1px solid #e0e0e0", borderRadius: 8, padding: "8px 12px", fontSize: 12, cursor: "pointer" }}>Skip</button>
-                              </div>
+                              <p style={{ margin: 0, fontSize: 14, color: T.faint }}>{ai && ai.error ? ai.error : "No message drafted yet."}</p>
                             )}
                           </div>
-                        );
-                      })}
-                    </div>
-                  )}
-                </div>
-
-                {/* Stats */}
-                <div style={{ display: "grid", gridTemplateColumns: isMobile ? "repeat(2, 1fr)" : "repeat(auto-fit, minmax(160px, 1fr))", gap: isMobile ? 10 : 14, marginBottom: isMobile ? 20 : 32 }}>
-                  {stats.map((s, i) => (
-                    <div key={i} style={{ background: "#fff", borderRadius: 12, padding: isMobile ? "14px 14px" : "18px 20px", boxShadow: "0 1px 4px rgba(0,0,0,0.07)", borderTop: s.accent ? "3px solid #e74c3c" : "3px solid #1a1a2e" }}>
-                      <p style={{ margin: 0, fontSize: 24, fontWeight: 700, color: s.accent ? "#e74c3c" : "#1a1a2e" }}>{s.value}</p>
-                      <p style={{ margin: "2px 0 0", fontSize: 12, color: "#888" }}>{s.label}</p>
-                      <p style={{ margin: "1px 0 0", fontSize: 11, color: "#bbb" }}>{s.sub}</p>
-                    </div>
-                  ))}
-                </div>
-
-                {/* Member table */}
-                <div style={{ background: "#fff", borderRadius: 14, boxShadow: "0 1px 4px rgba(0,0,0,0.07)", overflow: "hidden" }}>
-                  <div style={{ padding: isMobile ? "14px 16px" : "18px 24px", borderBottom: "1px solid #f0f0f0", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
-                    <h2 style={{ margin: 0, fontSize: 16, fontWeight: 700, color: "#1a1a2e" }}>Member Risk Monitor</h2>
-                    <span style={{ background: "#fff1f1", color: "#c0392b", fontSize: 12, fontWeight: 600, padding: "3px 10px", borderRadius: 20, whiteSpace: "nowrap" }}>
-                      {scopedMembers.filter(m => m.risk === "high").length} need attention
-                    </span>
-                  </div>
-
-                  {/* Table header (hidden on mobile — rows become cards) */}
-                  <div style={{ display: isMobile ? "none" : "grid", gridTemplateColumns: "2fr 1.5fr 1fr 1fr 1.2fr 1.5fr 1fr", padding: "10px 24px", background: "#fafafa", borderBottom: "1px solid #f0f0f0" }}>
-                    {["Member","Plan","Last Visit","Usual Schedule","Risk Score","Status","Actions"].map((h, i) => (
-                      <span key={i} style={{ fontSize: 11, fontWeight: 600, color: "#aaa", textTransform: "uppercase", letterSpacing: 0.5 }}>{h}</span>
-                    ))}
-                  </div>
-
-                  {filteredMembers.length === 0 && (
-                    <div style={{ padding: "40px 24px", textAlign: "center", color: "#888", fontSize: 13 }}>
-                      No members match this filter or search.
-                    </div>
-                  )}
-                  {filteredMembers.map(m => {
-                    const ai        = aiResults[m.id];
-                    const effRisk   = deriveRisk(m, ai);
-                    const rc        = riskConfig[effRisk];
-                    const isSelected = selected === m.id;
-                    const isLoading  = loading[m.id];
-                    const logged    = outreachLog.find(o => o.memberId === m.id);
-                    const scheduled = scheduledIds.has(m.id);
-
-                    return (
-                      <div key={m.id}>
-                        {/* Row — desktop table columns, or a stacked card on mobile */}
-                        <div
-                          onClick={() => setSelected(isSelected ? null : m.id)}
-                          style={isMobile
-                            ? { padding: "14px 16px", borderBottom: "1px solid #f7f7f7", cursor: "pointer", background: isSelected ? "#fafbff" : "#fff" }
-                            : { display: "grid", gridTemplateColumns: "2fr 1.5fr 1fr 1fr 1.2fr 1.5fr 1fr", padding: "14px 24px", borderBottom: "1px solid #f7f7f7", cursor: "pointer", background: isSelected ? "#fafbff" : "#fff", transition: "background 0.15s" }}
-                        >
-                          {isMobile ? (
-                            <>
-                              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                                <div style={{ width: 34, height: 34, borderRadius: "50%", background: rc.bg, color: rc.color, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, fontWeight: 700, flexShrink: 0, border: `1.5px solid ${rc.border}` }}>{m.initials}</div>
-                                <div style={{ flex: 1, minWidth: 0 }}>
-                                  <span style={{ fontSize: 14, fontWeight: 600, color: "#1a1a2e", display: "block" }}>{m.name}</span>
-                                  {m.location && <span style={{ fontSize: 10, color: "#8e44ad", fontWeight: 600, display: "block", marginTop: 1 }}>📍 {m.location}</span>}
-                                  {ai && !ai.error && <span style={{ fontSize: 11, color: "#27ae60", fontWeight: 600 }}>✓ AI analyzed</span>}
-                                  {ai && ai.error && <span style={{ fontSize: 11, color: "#c0392b", fontWeight: 600 }}>⚠ analysis failed</span>}
-                                  {isLoading && <span style={{ fontSize: 11, color: "#f39c12" }}>⏳ analyzing...</span>}
-                                  {logged && <span style={{ fontSize: 11, color: "#185fa5", fontWeight: 600 }}>📨 outreach sent</span>}
-                                  {scheduled && <span style={{ fontSize: 11, color: "#8e44ad" }}> · ⏰ follow-up scheduled</span>}
-                                </div>
-                                <span style={{ background: rc.bg, color: rc.color, fontSize: 11, fontWeight: 600, padding: "3px 10px", borderRadius: 20, border: `1px solid ${rc.border}`, flexShrink: 0 }}>{rc.label}</span>
-                              </div>
-                              <div style={{ fontSize: 12, color: "#888", marginTop: 8, display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
-                                <span style={{ color: "#555" }}>{m.plan}</span><span>·</span>
-                                <span style={{ color: effRisk === "high" ? "#c0392b" : "#555", fontWeight: effRisk === "high" ? 600 : 400 }}>{m.lastVisit}</span><span>·</span>
-                                <span>{m.usualVisits}</span>
-                              </div>
-                              <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 10 }}>
-                                <div style={{ flex: 1, height: 6, background: "#f0f0f0", borderRadius: 3, overflow: "hidden" }}>
-                                  <div style={{ width: `${ai && !ai.error ? ai.score : m.score}%`, height: "100%", background: rc.bar, borderRadius: 3, transition: "width 0.6s ease" }} />
-                                </div>
-                                <span style={{ fontSize: 12, fontWeight: 600, color: rc.color, minWidth: 28 }}>{ai && !ai.error ? ai.score : m.score}</span>
-                              </div>
-                              <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 10, flexWrap: "wrap" }} onClick={e => e.stopPropagation()}>
-                                {m.risk === "high" && !ai && !isLoading && (
-                                  <button onClick={e => analyzeOne(m, e)} style={{ fontSize: 11, background: "#fff1f1", border: "1px solid #fbc9c9", color: "#c0392b", borderRadius: 6, padding: "5px 12px", cursor: "pointer", fontWeight: 600 }}>Analyze</button>
-                                )}
-                                {ai && !ai.error && !logged && (
-                                  <button onClick={() => markOutreach(m, ai)} style={{ fontSize: 11, background: "#e8f4fd", border: "1px solid #b3d9f5", color: "#185fa5", borderRadius: 6, padding: "5px 12px", cursor: "pointer", fontWeight: 600 }}>Log Send</button>
-                                )}
-                                <button onClick={() => setModalMember(m)} style={{ fontSize: 11, background: "#f5f5f5", border: "1px solid #ddd", color: "#555", borderRadius: 6, padding: "5px 12px", cursor: "pointer" }}>View</button>
-                              </div>
-                            </>
-                          ) : (
-                          <>
-                          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                            <div style={{ width: 34, height: 34, borderRadius: "50%", background: rc.bg, color: rc.color, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, fontWeight: 700, flexShrink: 0, border: `1.5px solid ${rc.border}` }}>{m.initials}</div>
-                            <div>
-                              <span style={{ fontSize: 14, fontWeight: 600, color: "#1a1a2e", display: "block" }}>{m.name}</span>
-                              {m.location && <span style={{ fontSize: 10, color: "#8e44ad", fontWeight: 600, display: "block", marginTop: 1 }}>📍 {m.location}</span>}
-                              {ai && !ai.error && <span style={{ fontSize: 11, color: "#27ae60", fontWeight: 600 }}>✓ AI analyzed</span>}
-                              {ai && ai.error && <span style={{ fontSize: 11, color: "#c0392b", fontWeight: 600 }}>⚠ analysis failed</span>}
-                              {isLoading && <span style={{ fontSize: 11, color: "#f39c12" }}>⏳ analyzing...</span>}
-                              {logged && <span style={{ fontSize: 11, color: "#185fa5", fontWeight: 600 }}>📨 outreach sent</span>}
-                              {scheduled && <span style={{ fontSize: 11, color: "#8e44ad" }}> · ⏰ follow-up scheduled</span>}
-                            </div>
-                          </div>
-                          <span style={{ fontSize: 13, color: "#555", display: "flex", alignItems: "center" }}>{m.plan}</span>
-                          <span style={{ fontSize: 13, color: effRisk === "high" ? "#c0392b" : "#555", fontWeight: effRisk === "high" ? 600 : 400, display: "flex", alignItems: "center" }}>{m.lastVisit}</span>
-                          <span style={{ fontSize: 12, color: "#888", display: "flex", alignItems: "center" }}>{m.usualVisits}</span>
-                          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                            <div style={{ flex: 1, height: 6, background: "#f0f0f0", borderRadius: 3, overflow: "hidden" }}>
-                              <div style={{ width: `${ai && !ai.error ? ai.score : m.score}%`, height: "100%", background: rc.bar, borderRadius: 3, transition: "width 0.6s ease" }} />
-                            </div>
-                            <span style={{ fontSize: 12, fontWeight: 600, color: rc.color, minWidth: 28 }}>{ai && !ai.error ? ai.score : m.score}</span>
-                          </div>
-                          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                            <span style={{ background: rc.bg, color: rc.color, fontSize: 11, fontWeight: 600, padding: "3px 10px", borderRadius: 20, border: `1px solid ${rc.border}` }}>{rc.label}</span>
-                          </div>
-                          {/* Inline action buttons */}
-                          <div style={{ display: "flex", alignItems: "center", gap: 6 }} onClick={e => e.stopPropagation()}>
-                            {m.risk === "high" && !ai && !isLoading && (
-                              <button onClick={e => analyzeOne(m, e)} style={{ fontSize: 10, background: "#fff1f1", border: "1px solid #fbc9c9", color: "#c0392b", borderRadius: 6, padding: "3px 8px", cursor: "pointer", fontWeight: 600 }}>
-                                Analyze
-                              </button>
-                            )}
-                            {ai && !ai.error && !logged && (
-                              <button onClick={() => markOutreach(m, ai)} style={{ fontSize: 10, background: "#e8f4fd", border: "1px solid #b3d9f5", color: "#185fa5", borderRadius: 6, padding: "3px 8px", cursor: "pointer", fontWeight: 600 }}>
-                                Log Send
-                              </button>
-                            )}
-                            <button onClick={() => setModalMember(m)} style={{ fontSize: 10, background: "#f5f5f5", border: "1px solid #ddd", color: "#555", borderRadius: 6, padding: "3px 8px", cursor: "pointer" }}>
-                              View
-                            </button>
-                          </div>
-                          </>
-                          )}
-                        </div>
-
-                        {/* Expanded row */}
-                        {isSelected && (
-                          <div style={{ padding: "16px 24px 20px", background: "#fafbff", borderBottom: "1px solid #f0f0f0" }}>
-                            {isLoading ? (
-                              <p style={{ margin: 0, fontSize: 13, color: "#f39c12" }}>⏳ Claude is analyzing {m.name.split(" ")[0]}...</p>
-                            ) : ai && ai.error ? (
-                              <div style={{ background: "#fff1f1", border: "1px solid #fbc9c9", borderRadius: 10, padding: "14px 16px" }}>
-                                <p style={{ margin: "0 0 8px", fontSize: 13, color: "#c0392b", fontWeight: 600 }}>⚠ {ai.error}</p>
-                                <button onClick={() => analyzeOne(m)} style={{ background: "linear-gradient(135deg,#e74c3c,#c0392b)", color: "#fff", border: "none", borderRadius: 8, padding: "7px 16px", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>↻ Try again</button>
-                              </div>
-                            ) : ai ? (
-                              <div>
-                                <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr 1fr", gap: isMobile ? 10 : 14, marginBottom: 14 }}>
-                                  <div style={{ background: "#fff", border: "1px solid #e8e8e8", borderRadius: 10, padding: "12px 16px" }}>
-                                    <p style={{ margin: "0 0 4px", fontSize: 11, fontWeight: 600, color: "#aaa", textTransform: "uppercase", letterSpacing: 0.5 }}>AI Risk Assessment</p>
-                                    <p style={{ margin: 0, fontSize: 13, color: "#333", lineHeight: 1.6 }}>{ai.reason}</p>
-                                  </div>
-                                  <div style={{ background: "#fff", border: "1px solid #e8e8e8", borderRadius: 10, padding: "12px 16px" }}>
-                                    <p style={{ margin: "0 0 4px", fontSize: 11, fontWeight: 600, color: "#aaa", textTransform: "uppercase", letterSpacing: 0.5 }}>AI Score</p>
-                                    <p style={{ margin: "0 0 6px", fontSize: 28, fontWeight: 700, color: rc.color }}>{ai.score}<span style={{ fontSize: 14, color: "#aaa" }}>/100</span></p>
-                                    {ai.offerType && offerLabels[ai.offerType] && (
-                                      <span style={{ background: "#f0faf4", color: "#1e7e45", fontSize: 11, fontWeight: 600, padding: "3px 10px", borderRadius: 20, border: "1px solid #b6e8c8" }}>
-                                        {offerLabels[ai.offerType]}
-                                      </span>
-                                    )}
-                                  </div>
-                                  <div style={{ background: "#fff", border: "1px solid #e8e8e8", borderRadius: 10, padding: "12px 16px" }}>
-                                    <p style={{ margin: "0 0 4px", fontSize: 11, fontWeight: 600, color: "#aaa", textTransform: "uppercase", letterSpacing: 0.5 }}>Follow-up Timing</p>
-                                    <p style={{ margin: 0, fontSize: 22, fontWeight: 700, color: "#1a1a2e" }}>{ai.followUpDays || 3}<span style={{ fontSize: 13, color: "#aaa", fontWeight: 400 }}> days</span></p>
-                                    <p style={{ margin: "2px 0 0", fontSize: 11, color: "#aaa" }}>If no response</p>
-                                  </div>
-                                </div>
-                                <p style={{ margin: "0 0 8px", fontSize: 11, fontWeight: 600, color: "#aaa", textTransform: "uppercase", letterSpacing: 0.5 }}>Claude-Generated SMS</p>
-                                <div style={{ background: "#fff", border: "1px solid #e8e8e8", borderRadius: 10, padding: "12px 16px", fontSize: 13, color: "#333", lineHeight: 1.6, fontStyle: "italic", marginBottom: 12 }}>
-                                  "{ai.message}"
-                                </div>
-                                <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-                                  {!smsSent.has(m.id) ? (
-                                    <button
-                                      onClick={() => handleSendSMS(m, ai)}
-                                      disabled={smsSending[m.id]}
-                                      style={{
-                                        background: smsSending[m.id] ? "#ccc" : "linear-gradient(135deg,#27ae60,#1e7e45)",
-                                        color: "#fff", border: "none", borderRadius: 8, padding: "8px 16px",
-                                        fontSize: 12, fontWeight: 600, cursor: smsSending[m.id] ? "not-allowed" : "pointer",
-                                        boxShadow: smsSending[m.id] ? "none" : "0 4px 12px rgba(39,174,96,0.35)",
-                                      }}
-                                    >
-                                      {smsSending[m.id] ? "⏳ Sending..." : "📱 Send SMS Now"}
-                                    </button>
-                                  ) : (
-                                    <span style={{ fontSize: 12, color: "#27ae60", fontWeight: 600, display: "flex", alignItems: "center", gap: 4 }}>
-                                      ✓ SMS delivered to {m.phone}
-                                    </span>
-                                  )}
-                                  {!logged && (
-                                    <button onClick={() => markOutreach(m, ai)} style={{ background: "linear-gradient(135deg,#185fa5,#0c447c)", color: "#fff", border: "none", borderRadius: 8, padding: "8px 16px", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
-                                      📨 Log Only (no SMS)
-                                    </button>
-                                  )}
-                                  {!scheduled && (
-                                    <button onClick={() => scheduleFollowUp(m, ai)} style={{ background: "#f5f0ff", color: "#8e44ad", border: "1px solid #d7b9f5", borderRadius: 8, padding: "8px 16px", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
-                                      ⏰ Schedule Follow-up ({ai.followUpDays || 3}d)
-                                    </button>
-                                  )}
-                                  {logged && (
-                                    <span style={{ fontSize: 12, color: "#27ae60", display: "flex", alignItems: "center", gap: 4 }}>✓ Outreach logged {logged.sentAt}</span>
-                                  )}
-                                </div>
-                                <p style={{ margin: "10px 0 0", fontSize: 11, color: "#bbb" }}>Claude AI analysis · SMS delivery via Twilio</p>
-
-                                {/* ── Conversational retention: handle the member's reply ── */}
-                                <div style={{ marginTop: 16, paddingTop: 16, borderTop: "1px dashed #e0e0e0" }}>
-                                  <p style={{ margin: "0 0 8px", fontSize: 11, fontWeight: 600, color: "#8e44ad", textTransform: "uppercase", letterSpacing: 0.5 }}>💬 Member replied? Let Claude handle the conversation</p>
-
-                                  {/* Conversation thread (multi-turn memory from the agent backend) */}
-                                  {(convs[m.id] || []).length > 0 && (
-                                    <div role="log" aria-label={`Conversation with ${m.name}`} style={{ maxHeight: 220, overflowY: "auto", marginBottom: 10, padding: "10px 12px", background: "#fff", border: "1px solid #eee", borderRadius: 10, display: "flex", flexDirection: "column", gap: 6 }}>
-                                      {convs[m.id].map((t, i) => (
-                                        <div key={i} style={{ alignSelf: t.role === "member" ? "flex-end" : "flex-start", maxWidth: "80%" }}>
-                                          <p style={{ margin: "0 0 2px", fontSize: 9, fontWeight: 700, color: "#bbb", textTransform: "uppercase", letterSpacing: 0.5, textAlign: t.role === "member" ? "right" : "left" }}>
-                                            {t.role === "member" ? m.name.split(" ")[0] : "Studio"}
-                                          </p>
-                                          <div style={{ background: t.role === "member" ? "#fff1f1" : "#f5f0ff", border: `1px solid ${t.role === "member" ? "#fbc9c9" : "#e0d3f5"}`, borderRadius: 10, padding: "7px 11px", fontSize: 12.5, color: "#333", lineHeight: 1.5 }}>
-                                            {t.text}
-                                          </div>
-                                        </div>
-                                      ))}
-                                    </div>
-                                  )}
-
-                                  <textarea
-                                    value={replyText[m.id] || ""}
-                                    onChange={e => setReplyText(prev => ({ ...prev, [m.id]: e.target.value }))}
-                                    placeholder={`Paste ${m.name.split(" ")[0]}'s reply — e.g. "Honestly it's just gotten too expensive for me right now."`}
-                                    aria-label={`Reply received from ${m.name}`}
-                                    rows={2}
-                                    style={{ width: "100%", boxSizing: "border-box", border: "1px solid #e0d3f5", borderRadius: 8, padding: "10px 12px", fontSize: 13, fontFamily: "inherit", resize: "vertical", outline: "none" }}
-                                  />
-                                  <button
-                                    onClick={() => draftReply(m, ai)}
-                                    disabled={replyLoading[m.id]}
-                                    style={{ marginTop: 8, background: replyLoading[m.id] ? "#ccc" : "linear-gradient(135deg,#8e44ad,#6c3483)", color: "#fff", border: "none", borderRadius: 8, padding: "8px 16px", fontSize: 12, fontWeight: 600, cursor: replyLoading[m.id] ? "not-allowed" : "pointer" }}
-                                  >
-                                    {replyLoading[m.id] ? "⏳ Claude is drafting..." : "✨ Draft AI Reply"}
-                                  </button>
-
-                                  {replyDrafts[m.id] && replyDrafts[m.id].error && (
-                                    <p style={{ margin: "10px 0 0", fontSize: 12, color: "#c0392b" }}>⚠ {replyDrafts[m.id].error}</p>
-                                  )}
-
-                                  {replyDrafts[m.id] && !replyDrafts[m.id].error && (() => {
-                                    const d = replyDrafts[m.id];
-                                    const sc = { positive:{bg:"#f0faf4",c:"#1e7e45"}, neutral:{bg:"#eef2f7",c:"#555"}, hesitant:{bg:"#fffbf0",c:"#b7770d"}, leaving:{bg:"#fff1f1",c:"#c0392b"} }[d.sentiment] || { bg:"#eef2f7", c:"#555" };
-                                    return (
-                                      <div style={{ marginTop: 12, background: "#faf7ff", border: "1px solid #e0d3f5", borderRadius: 10, padding: "12px 14px" }}>
-                                        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8, flexWrap: "wrap" }}>
-                                          <span style={{ background: sc.bg, color: sc.c, fontSize: 11, fontWeight: 600, padding: "2px 9px", borderRadius: 20, textTransform: "capitalize" }}>{d.sentiment || "reply"}</span>
-                                          {d.suggestedOffer && offerLabels[d.suggestedOffer] && (
-                                            <span style={{ background: "#f0faf4", color: "#1e7e45", fontSize: 11, fontWeight: 600, padding: "2px 9px", borderRadius: 20, border: "1px solid #b6e8c8" }}>{offerLabels[d.suggestedOffer]}</span>
-                                          )}
-                                        </div>
-                                        {d.escalate && (
-                                          <p style={{ margin: "0 0 8px", fontSize: 12, fontWeight: 600, color: "#c0392b", background: "#fff1f1", border: "1px solid #fbc9c9", borderRadius: 8, padding: "6px 10px" }}>
-                                            ⚠ The AI recommends the owner handle this one personally
-                                          </p>
-                                        )}
-                                        <p style={{ margin: "0 0 4px", fontSize: 11, fontWeight: 600, color: "#8e44ad", textTransform: "uppercase", letterSpacing: 0.5 }}>Claude's suggested reply</p>
-                                        <div style={{ background: "#fff", border: "1px solid #e8e8e8", borderRadius: 8, padding: "10px 14px", fontSize: 13, color: "#333", lineHeight: 1.6, fontStyle: "italic" }}>"{d.reply}"</div>
-                                        {d.nextStep && <p style={{ margin: "8px 0 0", fontSize: 12, color: "#666" }}>🧭 {d.nextStep}</p>}
-                                        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 10 }}>
-                                          <button onClick={() => sendReplySMS(m)} disabled={replySending[m.id]} style={{ background: replySending[m.id] ? "#ccc" : "linear-gradient(135deg,#27ae60,#1e7e45)", color: "#fff", border: "none", borderRadius: 8, padding: "7px 14px", fontSize: 12, fontWeight: 600, cursor: replySending[m.id] ? "not-allowed" : "pointer" }}>{replySending[m.id] ? "⏳ Sending..." : "📱 Send Reply"}</button>
-                                          <button onClick={() => approveReplyNoSMS(m)} aria-label="Approve and log reply without sending SMS" style={{ background: "linear-gradient(135deg,#185fa5,#0c447c)", color: "#fff", border: "none", borderRadius: 8, padding: "7px 14px", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>✓ Approve & Log</button>
-                                          <button onClick={() => copyReply(m)} aria-label="Copy drafted reply" style={{ background: "#fff", color: "#8e44ad", border: "1px solid #d7b9f5", borderRadius: 8, padding: "7px 14px", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>📋 Copy</button>
-                                          <button onClick={() => draftReply(m, ai)} aria-label="Redraft reply" style={{ background: "#fff", color: "#555", border: "1px solid #ddd", borderRadius: 8, padding: "7px 14px", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>↻ Redraft</button>
-                                        </div>
-                                      </div>
-                                    );
-                                  })()}
-                                </div>
-                              </div>
+                          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: isMobile ? "flex-start" : "flex-end" }}>
+                            {ready ? (
+                              <>
+                                {!smsSent.has(m.id) && <button onClick={() => handleSendSMS(m, ai)} disabled={smsSending[m.id]} style={btn("send", smsSending[m.id] ? { opacity: 0.5, cursor: "not-allowed" } : {})}>{smsSending[m.id] ? "Sending…" : "Send text"}</button>}
+                                <button onClick={() => markOutreach(m, ai)} style={btn("log")}>Log as sent</button>
+                              </>
                             ) : (
-                              <div>
-                                <p style={{ margin: "0 0 10px", fontSize: 13, color: "#555" }}>Click <strong>Analyze</strong> or <strong>Run AI Analysis</strong> to generate an assessment for {m.name.split(" ")[0]}.</p>
-                                <button onClick={() => analyzeOne(m)} style={{ background: "linear-gradient(135deg,#e74c3c,#c0392b)", color: "#fff", border: "none", borderRadius: 8, padding: "8px 18px", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
-                                  ⚡ Analyze {m.name.split(" ")[0]} now
-                                </button>
-                              </div>
+                              <button onClick={() => analyzeOne(m)} disabled={isLoading} style={btn("draft", isLoading ? { opacity: 0.5, cursor: "not-allowed" } : {})}>Draft message</button>
+                            )}
+                            <button onClick={() => skipForToday(m)} aria-label={`Skip ${m.name} for today`} style={btn("ghost")}>Skip</button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </section>
+
+                {/* All members */}
+                <section>
+                  <SectionHead isMobile={isMobile}
+                    title="All members"
+                    sub={`${riskCounts.high} high risk · ${riskCounts.medium} medium · ${riskCounts.low} low`}
+                    right={
+                      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                        <button onClick={analyzeAll} disabled={analyzing} style={btn("log", analyzing ? { opacity: 0.5, cursor: "not-allowed" } : {})}>{analyzing ? "Analyzing…" : "Analyze members"}</button>
+                        <button onClick={exportMembersCSV} aria-label="Export member list as CSV" style={btn("ghost")}>Export CSV</button>
+                        <button onClick={() => setShowData(true)} aria-label="Add or import your gym's members" style={btn("secondary")}>Add members</button>
+                      </div>
+                    } />
+
+                  <div style={accentPanel(T.orange)}>
+                    {/* Toolbar: risk filter + search */}
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap", padding: isMobile ? "12px 16px" : "12px 24px", borderBottom: `1px solid ${T.line}` }}>
+                      <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+                        {["all", "high", "medium", "low"].map(f => (
+                          <button key={f} onClick={() => setFilterRisk(f)} aria-pressed={filterRisk === f} aria-label={`Filter members by ${f} risk`}
+                            style={{ background: filterRisk === f ? (f === "all" ? T.soft : riskTone[f].bg) : "transparent", border: "none", borderRadius: 6, padding: "6px 10px", fontFamily: SANS, fontSize: 13, cursor: "pointer", color: filterRisk === f ? (f === "all" ? T.ink : riskTone[f].color) : T.muted, fontWeight: filterRisk === f ? 600 : 400 }}>
+                            {f === "all" ? "All" : riskConfig[f].label} <span style={{ color: T.faint, fontWeight: 400 }}>{riskCounts[f]}</span>
+                          </button>
+                        ))}
+                      </div>
+                      <input type="text" value={search} onChange={e => setSearch(e.target.value)} placeholder="Search by name" aria-label="Search members by name"
+                        style={{ padding: "7px 12px", borderRadius: 8, border: `1px solid ${T.line}`, fontFamily: SANS, fontSize: isMobile ? 16 : 13, outline: "none", width: isMobile ? "100%" : 220, boxSizing: "border-box", color: T.ink }} />
+                    </div>
+
+                    {!isMobile && (
+                      <div style={{ display: "grid", gridTemplateColumns: "2fr 1.4fr 1fr 1.1fr 0.8fr 1fr 20px", gap: 12, padding: "8px 24px", borderBottom: `1px solid ${T.line}`, background: T.page }}>
+                        {["Member", "Plan", "Last visit", "Usual schedule", "Monthly", "Risk", ""].map((h, i) => (
+                          <span key={i} style={{ fontSize: 12, color: T.faint }}>{h}</span>
+                        ))}
+                      </div>
+                    )}
+
+                    {filteredMembers.length === 0 && (
+                      <p style={{ margin: 0, padding: "36px 24px", textAlign: "center", color: T.muted, fontSize: 14 }}>No members match this filter or search.</p>
+                    )}
+                    {filteredMembers.map(m => {
+                      const ai = aiResults[m.id];
+                      const effRisk = deriveRisk(m, ai);
+                      const score = ai && !ai.error ? ai.score : m.score;
+                      const isSelected = selected === m.id;
+                      const logged = outreachLog.find(o => o.memberId === m.id);
+                      const status = loading[m.id] ? "Analyzing…" : logged ? "Contacted" : ai && ai.error ? "Analysis failed" : ai ? "Message ready" : null;
+                      const meta = [locations.length > 1 ? m.location : null, status, scheduledIds.has(m.id) ? "Follow-up set" : null].filter(Boolean).join(" · ");
+                      return (
+                        <div key={m.id}>
+                          <div onClick={() => setSelected(isSelected ? null : m.id)} role="button" tabIndex={0} aria-expanded={isSelected}
+                            onKeyDown={e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setSelected(isSelected ? null : m.id); } }}
+                            style={isMobile
+                              ? { padding: "14px 16px", borderBottom: `1px solid ${T.line}`, cursor: "pointer", background: isSelected ? T.page : "#fff" }
+                              : { display: "grid", gridTemplateColumns: "2fr 1.4fr 1fr 1.1fr 0.8fr 1fr 20px", gap: 12, alignItems: "center", padding: "10px 24px", borderBottom: `1px solid ${T.line}`, cursor: "pointer", background: isSelected ? T.page : "#fff" }}>
+                            {isMobile ? (
+                              <>
+                                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
+                                  <span style={{ fontSize: 15, fontWeight: 600, color: T.ink }}>{m.name}</span>
+                                  <RiskTag risk={effRisk} score={score} />
+                                </div>
+                                <p style={{ margin: "4px 0 0", fontSize: 13, color: T.muted }}>{m.plan} · last visit {m.lastVisit.toLowerCase()} · ${m.value}/mo</p>
+                                {meta && <p style={{ margin: "2px 0 0", fontSize: 12, color: T.faint }}>{meta}</p>}
+                              </>
+                            ) : (
+                              <>
+                                <div>
+                                  <span style={{ fontSize: 14, fontWeight: 600, color: T.ink }}>{m.name}</span>
+                                  {meta && <span style={{ display: "block", fontSize: 12, color: logged ? T.green : ai && !ai.error ? T.purple : T.faint, marginTop: 2 }}>{meta}</span>}
+                                </div>
+                                <span style={{ fontSize: 14 }}>{m.plan}</span>
+                                <span style={{ fontSize: 14, color: effRisk === "high" ? T.ink : T.body }}>{m.lastVisit}</span>
+                                <span style={{ fontSize: 14, color: T.muted }}>{m.usualVisits}</span>
+                                <span style={{ fontSize: 14 }}>${m.value}</span>
+                                <RiskTag risk={effRisk} score={score} />
+                                <Chevron open={isSelected} />
+                              </>
                             )}
                           </div>
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
+                          {isSelected && renderMemberDetail(m)}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </section>
               </>
             )}
 
             {/* ════════════════════════════════════════════════════════════
-                TAB: OUTREACH LOG
+                TAB: OUTREACH  (log of everyone contacted)
             ════════════════════════════════════════════════════════════ */}
             {activeTab === "Outreach" && (
               <>
-                <div style={{ marginBottom: 24, display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 12 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", flexWrap: "wrap", gap: 12, marginBottom: 20 }}>
                   <div>
-                    <h1 style={{ margin: 0, fontSize: 26, fontWeight: 700, color: "#1a1a2e" }}>Outreach Log</h1>
-                    <p style={{ margin: "4px 0 0", color: "#888", fontSize: 14 }}>Track every message sent and its outcome</p>
+                    <h1 style={{ margin: 0, fontFamily: SERIF, fontSize: isMobile ? 26 : 32, fontWeight: 400, color: T.ink }}>Outreach</h1>
+                    <p style={{ margin: "6px 0 0", fontSize: 14, color: T.muted }}>Everyone you've contacted and how it went.</p>
                   </div>
-                  {outreachLog.length > 0 && (
-                    <button onClick={exportOutreachCSV} aria-label="Export outreach log as CSV" style={{ background: "#fff", color: "#1a1a2e", border: "1px solid #ddd", borderRadius: 10, padding: "10px 16px", fontSize: 13, fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap" }}>⬇ Export CSV</button>
-                  )}
+                  {outreachLog.length > 0 && <button onClick={exportOutreachCSV} aria-label="Export outreach log as CSV" style={btn("secondary")}>Export CSV</button>}
                 </div>
 
+                {outreachLog.length > 0 && (
+                  <div style={{ display: "grid", gridTemplateColumns: isMobile ? "repeat(2, 1fr)" : "repeat(4, 1fr)", gap: 12, marginBottom: 24 }}>
+                    <Stat isMobile={isMobile} label="Texts sent" value={outreachCounts.sent} />
+                    <Stat isMobile={isMobile} tone="mid" label="Replied" value={outreachCounts.responded} />
+                    <Stat isMobile={isMobile} tone="good" label="Won back" value={outreachCounts.recovered} />
+                    <Stat isMobile={isMobile} tone="good" label="Revenue saved" value={statByLabel["Revenue Saved"]} sub="per year" />
+                  </div>
+                )}
+
                 {outreachLog.length === 0 ? (
-                  <div style={{ background: "#fff", borderRadius: 14, boxShadow: "0 1px 4px rgba(0,0,0,0.07)", padding: "48px 24px", textAlign: "center" }}>
-                    <p style={{ fontSize: 32, margin: "0 0 8px" }}>📬</p>
-                    <p style={{ fontSize: 16, fontWeight: 600, color: "#1a1a2e", margin: "0 0 4px" }}>No outreach logged yet</p>
-                    <p style={{ fontSize: 13, color: "#888", margin: 0 }}>Go to Dashboard → run AI analysis on a high-risk member → click "Log Outreach as Sent"</p>
+                  <div style={{ ...panel, padding: "48px 24px", textAlign: "center" }}>
+                    <p style={{ fontSize: 16, color: T.ink, margin: "0 0 6px", fontFamily: SERIF }}>No outreach yet</p>
+                    <p style={{ fontSize: 14, color: T.muted, margin: 0 }}>Texts you send or log from the Today page will show up here.</p>
                   </div>
                 ) : (
-                  <div style={{ background: "#fff", borderRadius: 14, boxShadow: "0 1px 4px rgba(0,0,0,0.07)", overflow: "hidden" }}>
-                    <div style={{ display: isMobile ? "none" : "grid", gridTemplateColumns: "1.5fr 1.5fr 1fr 2fr 1.2fr", padding: "10px 24px", background: "#fafafa", borderBottom: "1px solid #f0f0f0" }}>
-                      {["Member","Plan","Sent At","Message Preview","Outcome"].map((h, i) => (
-                        <span key={i} style={{ fontSize: 11, fontWeight: 600, color: "#aaa", textTransform: "uppercase", letterSpacing: 0.5 }}>{h}</span>
-                      ))}
-                    </div>
-                    {outreachLog.map(log => {
-                      const statusColors = {
-                        sent:      { bg: "#fffbf0", color: "#b7770d", label: "Sent" },
-                        responded: { bg: "#e8f4fd", color: "#185fa5", label: "Responded" },
-                        recovered: { bg: "#f0faf4", color: "#1e7e45", label: "Recovered ✓" },
-                        no_response: { bg: "#f9f9f9", color: "#888", label: "No Response" },
+                  <div style={accentPanel(T.purple)}>
+                    {!isMobile && (
+                      <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr 2.4fr 1.4fr", gap: 16, padding: "8px 24px", borderBottom: `1px solid ${T.line}`, background: T.page }}>
+                        {["Member", "Sent", "Message", "Outcome"].map(h => <span key={h} style={{ fontSize: 12, color: T.faint }}>{h}</span>)}
+                      </div>
+                    )}
+                    {[...outreachLog].reverse().map(log => {
+                      const statusMeta = {
+                        sent:        { label: "Waiting for reply", dot: T.purple,   color: "#6c3483", bg: T.purpleTint },
+                        responded:   { label: "Replied",           dot: T.amber,    color: T.amberDark, bg: T.amberTint },
+                        recovered:   { label: "Won back",          dot: T.greenMid, color: T.green, bg: T.greenTint },
+                        no_response: { label: "No reply",          dot: T.red,      color: T.redDark, bg: T.redTint },
                       };
-                      const sc = statusColors[log.status] || statusColors.sent;
+                      const sc = statusMeta[log.status] || statusMeta.sent;
+                      const link = (v) => btn(v, { fontSize: 12, padding: "4px 10px", borderRadius: 6 });
                       return (
                         <div key={log.id} style={isMobile
-                          ? { display: "flex", flexDirection: "column", gap: 6, padding: "14px 16px", borderBottom: "1px solid #f7f7f7" }
-                          : { display: "grid", gridTemplateColumns: "1.5fr 1.5fr 1fr 2fr 1.2fr", padding: "14px 24px", borderBottom: "1px solid #f7f7f7", alignItems: "start" }}>
-                          <span style={{ fontSize: 13, fontWeight: 600, color: "#1a1a2e" }}>{log.memberName}</span>
-                          <span style={{ fontSize: 12, color: "#555" }}>{log.plan} · ${log.value}/mo</span>
-                          <span style={{ fontSize: 11, color: "#aaa" }}>{log.sentAt}</span>
-                          <span style={{ fontSize: 12, color: "#555", fontStyle: "italic", lineHeight: 1.5 }}>"{log.message.slice(0, 80)}{log.message.length > 80 ? "…" : ""}"</span>
-                          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                            <span style={{ background: sc.bg, color: sc.color, fontSize: 11, fontWeight: 600, padding: "3px 10px", borderRadius: 20, display: "inline-block", textAlign: "center" }}>{sc.label}</span>
-                            {log.status === "recovered" && (
-                              <span style={{ fontSize: 10, color: "#1e7e45", textAlign: "center" }}>
-                                ≈ ${(Number(log.value || 0) * 12).toLocaleString()}/yr retained · &lt;$0.01 AI cost
-                              </span>
-                            )}
+                          ? { display: "flex", flexDirection: "column", gap: 6, padding: "16px", borderBottom: `1px solid ${T.line}` }
+                          : { display: "grid", gridTemplateColumns: "1.4fr 1fr 2.4fr 1.4fr", gap: 16, padding: "12px 24px", borderBottom: `1px solid ${T.line}`, alignItems: "start" }}>
+                          <div>
+                            <span style={{ fontSize: 14, fontWeight: 600, color: T.ink, display: "block" }}>{log.memberName}</span>
+                            <span style={{ fontSize: 12, color: T.faint }}>{log.plan} · ${log.value}/mo</span>
+                          </div>
+                          <span style={{ fontSize: 13, color: T.muted }}>{shortDate(log.sentAt)}</span>
+                          <span style={{ fontSize: 13, color: T.body, lineHeight: 1.55 }}>{log.message}</span>
+                          <div>
+                            <span style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12, fontWeight: 600, color: sc.color, background: sc.bg, padding: "3px 10px", borderRadius: 20 }}>
+                              <span style={{ width: 7, height: 7, borderRadius: "50%", background: sc.dot }} />{sc.label}
+                            </span>
+                            {log.status === "recovered" && <p style={{ margin: "4px 0 0", fontSize: 12, fontWeight: 600, color: T.green }}>${(Number(log.value || 0) * 12).toLocaleString()}/yr kept</p>}
                             {log.status === "sent" && (
-                              <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
-                                <button onClick={() => markStatus(log.id, "responded")} style={{ fontSize: 10, padding: "2px 7px", borderRadius: 5, border: "1px solid #b3d9f5", background: "#e8f4fd", color: "#185fa5", cursor: "pointer" }}>Responded</button>
-                                <button onClick={() => markStatus(log.id, "recovered")} style={{ fontSize: 10, padding: "2px 7px", borderRadius: 5, border: "1px solid #b6e8c8", background: "#f0faf4", color: "#1e7e45", cursor: "pointer" }}>Recovered</button>
-                                <button onClick={() => markStatus(log.id, "no_response")} style={{ fontSize: 10, padding: "2px 7px", borderRadius: 5, border: "1px solid #ddd", background: "#f9f9f9", color: "#888", cursor: "pointer" }}>No reply</button>
+                              <div style={{ display: "flex", gap: 6, marginTop: 8, flexWrap: "wrap" }}>
+                                <button onClick={() => markStatus(log.id, "responded")} style={link("remind")}>Replied</button>
+                                <button onClick={() => markStatus(log.id, "recovered")} style={link("send")}>Won back</button>
+                                <button onClick={() => markStatus(log.id, "no_response")} style={link("secondary")}>No reply</button>
                               </div>
                             )}
                             {log.status === "responded" && (
-                              <button onClick={() => markStatus(log.id, "recovered")} style={{ fontSize: 10, padding: "2px 7px", borderRadius: 5, border: "1px solid #b6e8c8", background: "#f0faf4", color: "#1e7e45", cursor: "pointer" }}>Mark Recovered</button>
+                              <div style={{ marginTop: 6 }}><button onClick={() => markStatus(log.id, "recovered")} style={link("send")}>Mark won back</button></div>
                             )}
                           </div>
                         </div>
@@ -1454,259 +1404,169 @@ export default function App() {
             )}
 
             {/* ════════════════════════════════════════════════════════════
-                TAB: ANALYTICS
+                TAB: INSIGHTS  (analytics + strategist + competitors)
             ════════════════════════════════════════════════════════════ */}
-            {activeTab === "Analytics" && (
-              <>
-                <div style={{ marginBottom: 24 }}>
-                  <h1 style={{ margin: 0, fontSize: 26, fontWeight: 700, color: "#1a1a2e" }}>Retention Analytics</h1>
-                  <p style={{ margin: "4px 0 0", color: "#888", fontSize: 14 }}>Revenue at risk, member health, and outreach effectiveness</p>
-                </div>
-
-                <div style={{ display: "grid", gridTemplateColumns: isMobile ? "repeat(2, 1fr)" : "repeat(auto-fit, minmax(200px, 1fr))", gap: isMobile ? 10 : 16, marginBottom: 24 }}>
-                  {[
-                    { label: "Monthly Revenue at Risk", value: `$${analyticsData.atRiskRevenue}/mo`, sub: `From ${members.filter(m=>m.risk==="high").length} high-risk members`, accent: true },
-                    { label: "Total Monthly Revenue",    value: `$${analyticsData.totalRevenue}/mo`, sub: `Across all ${members.length} members`, accent: false },
-                    { label: "Avg Churn Risk Score",     value: `${analyticsData.avgRisk}/100`,      sub: "Across all members", accent: analyticsData.avgRisk > 50 },
-                    { label: "Outreach Logged",          value: `${outreachLog.length}`,             sub: `${outreachLog.filter(o=>o.status==="recovered").length} recovered`, accent: false },
-                  ].map((c, i) => (
-                    <div key={i} style={{ background: "#fff", borderRadius: 12, padding: isMobile ? "14px 14px" : "20px 22px", boxShadow: "0 1px 4px rgba(0,0,0,0.07)", borderTop: c.accent ? "3px solid #e74c3c" : "3px solid #1a1a2e" }}>
-                      <p style={{ margin: 0, fontSize: isMobile ? 22 : 26, fontWeight: 700, color: c.accent ? "#e74c3c" : "#1a1a2e" }}>{c.value}</p>
-                      <p style={{ margin: "3px 0 0", fontSize: 12, color: "#555" }}>{c.label}</p>
-                      <p style={{ margin: "1px 0 0", fontSize: 11, color: "#aaa" }}>{c.sub}</p>
-                    </div>
-                  ))}
-                </div>
-
-                <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: 20 }}>
-                  {/* Risk breakdown */}
-                  <div style={{ background: "#fff", borderRadius: 14, boxShadow: "0 1px 4px rgba(0,0,0,0.07)", padding: "20px 24px" }}>
-                    <h2 style={{ margin: "0 0 16px", fontSize: 15, fontWeight: 700, color: "#1a1a2e" }}>Risk Distribution</h2>
-                    {["high","medium","low"].map(r => {
-                      const count = analyticsData.riskCounts[r];
-                      const pct   = Math.round((count / members.length) * 100);
-                      const rc    = riskConfig[r];
-                      return (
-                        <div key={r} style={{ marginBottom: 14 }}>
-                          <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
-                            <span style={{ fontSize: 13, color: "#555", textTransform: "capitalize" }}>{r === "high" ? "High Risk" : r === "medium" ? "Medium Risk" : "Low Risk"}</span>
-                            <span style={{ fontSize: 13, fontWeight: 600, color: rc.color }}>{count} members ({pct}%)</span>
-                          </div>
-                          <div style={{ height: 8, background: "#f0f0f0", borderRadius: 4, overflow: "hidden" }}>
-                            <div style={{ width: `${pct}%`, height: "100%", background: rc.bar, borderRadius: 4, transition: "width 0.5s" }} />
-                          </div>
-                        </div>
-                      );
-                    })}
+            {activeTab === "Insights" && (() => {
+              const reasons = intel?.reasons || {};
+              const competitors = intel?.competitors || [];
+              const reasonsTotal = Object.values(reasons).reduce((a, b) => a + b, 0);
+              const maxMembers = Math.max(1, ...competitors.map(c => c.members));
+              const total = scopedMembers.length || 1;
+              const sevLabel = {
+                high:   { text: "Act now", color: T.redDark,   bg: T.redTint },
+                medium: { text: "Watch",   color: T.amberDark, bg: T.amberTint },
+                info:   { text: "Insight", color: "#6c3483",   bg: T.purpleTint },
+                good:   { text: "Working", color: T.green,     bg: T.greenTint },
+              };
+              const card = (c) => ({ ...accentPanel(c), padding: isMobile ? "14px 16px" : "18px 22px" });
+              const h3 = { margin: "0 0 14px", fontFamily: SERIF, fontSize: 17, fontWeight: 400, color: T.ink };
+              const rowLabel = { display: "flex", justifyContent: "space-between", marginBottom: 6, fontSize: 13 };
+              return (
+                <>
+                  <div style={{ marginBottom: 20 }}>
+                    <h1 style={{ margin: 0, fontFamily: SERIF, fontSize: isMobile ? 26 : 32, fontWeight: 400, color: T.ink }}>Insights</h1>
+                    <p style={{ margin: "6px 0 0", fontSize: 14, color: T.muted }}>Where your revenue is, why members leave, and what to change.</p>
                   </div>
 
-                  {/* Revenue by plan */}
-                  <div style={{ background: "#fff", borderRadius: 14, boxShadow: "0 1px 4px rgba(0,0,0,0.07)", padding: "20px 24px" }}>
-                    <h2 style={{ margin: "0 0 16px", fontSize: 15, fontWeight: 700, color: "#1a1a2e" }}>Revenue by Plan</h2>
-                    {Object.entries(analyticsData.planRevenue)
-                      .sort((a, b) => b[1] - a[1])
-                      .map(([plan, rev]) => {
-                        const pct = Math.round((rev / analyticsData.totalRevenue) * 100);
-                        return (
-                          <div key={plan} style={{ marginBottom: 14 }}>
-                            <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
-                              <span style={{ fontSize: 12, color: "#555" }}>{plan}</span>
-                              <span style={{ fontSize: 13, fontWeight: 600, color: "#1a1a2e" }}>${rev}/mo ({pct}%)</span>
-                            </div>
-                            <div style={{ height: 8, background: "#f0f0f0", borderRadius: 4, overflow: "hidden" }}>
-                              <div style={{ width: `${pct}%`, height: "100%", background: "#1a1a2e", borderRadius: 4 }} />
-                            </div>
-                          </div>
-                        );
-                      })}
+                  <div style={{ display: "grid", gridTemplateColumns: isMobile ? "repeat(2, 1fr)" : "repeat(4, 1fr)", gap: 12, marginBottom: 28 }}>
+                    <Stat isMobile={isMobile} label="Revenue at risk" value={`$${insights.revenueAtRisk.toLocaleString()}/mo`} sub={`$${insights.projectedAnnual.toLocaleString()} a year`} accent={insights.revenueAtRisk > 0} />
+                    <Stat isMobile={isMobile} label="Monthly revenue" value={`$${analyticsData.totalRevenue.toLocaleString()}`} sub={`${scopedMembers.length} members`} />
+                    <Stat isMobile={isMobile} tone={analyticsData.avgRisk > 75 ? "bad" : analyticsData.avgRisk >= 35 ? "mid" : "good"} label="Average risk score" value={`${analyticsData.avgRisk}`} sub="out of 100" />
+                    <Stat isMobile={isMobile} tone="good" label="Won back" value={outreachCounts.recovered} sub={`${statByLabel["Revenue Saved"]} a year`} />
                   </div>
 
-                  {/* Outreach effectiveness */}
-                  <div style={{ background: "#fff", borderRadius: 14, boxShadow: "0 1px 4px rgba(0,0,0,0.07)", padding: "20px 24px", gridColumn: "1 / -1" }}>
-                    <h2 style={{ margin: "0 0 16px", fontSize: 15, fontWeight: 700, color: "#1a1a2e" }}>Outreach Effectiveness</h2>
-                    {outreachLog.length === 0 ? (
-                      <p style={{ fontSize: 13, color: "#aaa" }}>No outreach data yet. Go to Dashboard, analyze members, log some messages, and update their status in the Outreach tab.</p>
+                  {/* What to change (strategist) */}
+                  <section style={{ marginBottom: 28 }}>
+                    <SectionHead isMobile={isMobile} title="What to change" sub="Patterns across your roster, most urgent first." />
+                    {insights.findings.length === 0 ? (
+                      <div style={{ ...panel, padding: "36px 24px", textAlign: "center", fontSize: 14, color: T.muted }}>Nothing stands out yet. Add your members or analyze them to see patterns here.</div>
                     ) : (
-                      <div style={{ display: "grid", gridTemplateColumns: isMobile ? "repeat(2, 1fr)" : "repeat(4, 1fr)", gap: 14 }}>
-                        {[
-                          { label: "Sent",        count: outreachLog.length, color: "#b7770d", bg: "#fffbf0" },
-                          { label: "Responded",   count: outreachLog.filter(o=>["responded","recovered"].includes(o.status)).length, color: "#185fa5", bg: "#e8f4fd" },
-                          { label: "Recovered",   count: outreachLog.filter(o=>o.status==="recovered").length, color: "#1e7e45", bg: "#f0faf4" },
-                          { label: "No Response", count: outreachLog.filter(o=>o.status==="no_response").length, color: "#888", bg: "#f9f9f9" },
-                        ].map(item => (
-                          <div key={item.label} style={{ background: item.bg, borderRadius: 10, padding: "16px 18px", textAlign: "center" }}>
-                            <p style={{ margin: 0, fontSize: 32, fontWeight: 700, color: item.color }}>{item.count}</p>
-                            <p style={{ margin: "4px 0 0", fontSize: 12, color: item.color, fontWeight: 600 }}>{item.label}</p>
-                          </div>
+                      <div style={accentPanel(T.purple)}>
+                        {insights.findings.map((f, i) => {
+                          const sv = sevLabel[f.severity] || sevLabel.info;
+                          return (
+                            <div key={f.id} style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "90px 1fr", gap: isMobile ? 4 : 20, padding: isMobile ? "14px 16px" : "14px 22px", borderTop: i ? `1px solid ${T.line}` : "none", alignItems: "start" }}>
+                              <span style={{ justifySelf: "start", fontSize: 12, fontWeight: 600, color: sv.color, background: sv.bg, padding: "3px 10px", borderRadius: 20 }}>{sv.text}</span>
+                              <div>
+                                <p style={{ margin: 0, fontSize: 15, fontWeight: 600, color: T.ink }}>{f.title}</p>
+                                <p style={{ margin: "4px 0 0", fontSize: 14, color: T.body, lineHeight: 1.6 }}>{f.detail}</p>
+                                <p style={{ margin: "6px 0 0", fontSize: 14, color: T.muted, lineHeight: 1.6 }}>Next step: <span style={{ color: T.ink }}>{f.action}</span></p>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </section>
+
+                  {/* Revenue and risk breakdown */}
+                  <section style={{ marginBottom: 28 }}>
+                    <SectionHead isMobile={isMobile} title="Members and revenue" />
+                    <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: 16 }}>
+                      <div style={card(T.purple)}>
+                        <h3 style={h3}>Members by risk</h3>
+                        {["high", "medium", "low"].map(r => {
+                          const count = analyticsData.riskCounts[r];
+                          const pct = Math.round((count / total) * 100);
+                          return (
+                            <div key={r} style={{ marginBottom: 16 }}>
+                              <div style={rowLabel}><span>{riskConfig[r].label} risk</span><span style={{ color: riskTone[r].color, fontWeight: 600 }}>{count} · {pct}%</span></div>
+                              <Bar pct={pct} color={riskTone[r].dot} />
+                            </div>
+                          );
+                        })}
+                      </div>
+                      <div style={card(T.orange)}>
+                        <h3 style={h3}>Revenue by plan</h3>
+                        {Object.entries(analyticsData.planRevenue).sort((a, b) => b[1] - a[1]).map(([plan, rev]) => {
+                          const pct = analyticsData.totalRevenue ? Math.round((rev / analyticsData.totalRevenue) * 100) : 0;
+                          return (
+                            <div key={plan} style={{ marginBottom: 16 }}>
+                              <div style={rowLabel}><span>{plan}</span><span style={{ color: T.muted }}>${rev.toLocaleString()}/mo · {pct}%</span></div>
+                              <Bar pct={pct} color={T.purple} />
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    {locationSummary.length > 1 && (
+                      <div style={{ ...accentPanel(T.purple), marginTop: 16, overflowX: "auto" }}>
+                        <div style={{ display: "grid", gridTemplateColumns: "1.6fr 1fr 1fr 1fr", gap: 12, padding: "8px 24px", borderBottom: `1px solid ${T.line}`, minWidth: 420, background: T.page }}>
+                          {["Location", "Members", "High risk", "Revenue"].map(h => <span key={h} style={{ fontSize: 12, color: T.faint }}>{h}</span>)}
+                        </div>
+                        {locationSummary.map(loc => (
+                          <button key={loc.location} onClick={() => { setFilterLocation(loc.location); setActiveTab("Today"); }}
+                            style={{ display: "grid", gridTemplateColumns: "1.6fr 1fr 1fr 1fr", gap: 12, width: "100%", minWidth: 420, textAlign: "left", background: "#fff", border: "none", borderBottom: `1px solid ${T.line}`, padding: "10px 24px", fontFamily: SANS, fontSize: 14, color: T.body, cursor: "pointer" }}>
+                            <span style={{ color: T.ink, fontWeight: 600 }}>{loc.location}</span>
+                            <span>{loc.total}</span>
+                            <span style={{ color: loc.high > 0 ? T.redDark : T.green, fontWeight: 600 }}>{loc.high}</span>
+                            <span>${loc.revenue.toLocaleString()}/mo</span>
+                          </button>
                         ))}
                       </div>
                     )}
-                  </div>
-                </div>
-              </>
-            )}
+                  </section>
 
-            {/* ════════════════════════════════════════════════════════════
-                TAB: STRATEGIST (Retention Strategist — root-cause insights)
-            ════════════════════════════════════════════════════════════ */}
-            {activeTab === "Strategist" && (
-              <>
-                <div style={{ marginBottom: 22 }}>
-                  <h1 style={{ margin: 0, fontSize: 26, fontWeight: 700, color: "#1a1a2e" }}>Retention Strategist</h1>
-                  <p style={{ margin: "4px 0 0", color: "#888", fontSize: 14 }}>Not just <em>who's</em> leaving — <strong>why your gym is losing members, and what to change.</strong></p>
-                </div>
-
-                {/* Headline metrics */}
-                <div style={{ display: "grid", gridTemplateColumns: isMobile ? "repeat(2, 1fr)" : "repeat(auto-fit, minmax(190px, 1fr))", gap: isMobile ? 10 : 16, marginBottom: 22 }}>
-                  {[
-                    { label: "Members at Risk", value: String(insights.atRisk), sub: "high-risk right now", accent: insights.atRisk > 0 },
-                    { label: "Revenue at Risk", value: `$${insights.revenueAtRisk.toLocaleString()}/mo`, sub: `≈ $${insights.projectedAnnual.toLocaleString()}/yr`, accent: insights.revenueAtRisk > 0 },
-                    { label: "Biggest Leak", value: insights.topLeak ? "1 priority" : "—", sub: insights.topLeak || "no major leak detected", accent: false, small: true },
-                  ].map((c, i) => (
-                    <div key={i} style={{ background: "#fff", borderRadius: 12, padding: isMobile ? "14px 14px" : "18px 20px", boxShadow: "0 1px 4px rgba(0,0,0,0.07)", borderTop: c.accent ? "3px solid #e74c3c" : "3px solid #1a1a2e" }}>
-                      <p style={{ margin: 0, fontSize: c.small ? 14 : (isMobile ? 22 : 26), fontWeight: 700, color: c.accent ? "#e74c3c" : "#1a1a2e", lineHeight: 1.3 }}>{c.value}</p>
-                      <p style={{ margin: "3px 0 0", fontSize: 12, color: "#555" }}>{c.label}</p>
-                      <p style={{ margin: "1px 0 0", fontSize: 11, color: "#aaa" }}>{c.sub}</p>
+                  {/* Outreach results */}
+                  <section style={{ marginBottom: 28 }}>
+                    <SectionHead isMobile={isMobile} title="Outreach results" />
+                    <div style={{ ...card(T.orange), display: "grid", gridTemplateColumns: isMobile ? "repeat(2, 1fr)" : "repeat(4, 1fr)", gap: 20 }}>
+                      <Stat isMobile={isMobile} label="Texts sent" value={outreachCounts.sent} />
+                      <Stat isMobile={isMobile} tone="mid" label="Replied" value={outreachCounts.responded} />
+                      <Stat isMobile={isMobile} tone="good" label="Won back" value={outreachCounts.recovered} />
+                      <Stat isMobile={isMobile} tone="bad" label="No reply" value={outreachCounts.noReply} />
                     </div>
-                  ))}
-                </div>
+                  </section>
 
-                {/* Findings */}
-                {insights.findings.length === 0 ? (
-                  <div style={{ background: "#fff", borderRadius: 14, boxShadow: "0 1px 4px rgba(0,0,0,0.07)", padding: "48px 24px", textAlign: "center" }}>
-                    <p style={{ fontSize: 32, margin: "0 0 8px" }}>🧭</p>
-                    <p style={{ fontSize: 16, fontWeight: 600, color: "#1a1a2e", margin: "0 0 6px" }}>No major leaks detected</p>
-                    <p style={{ fontSize: 13, color: "#888", margin: "0 auto", maxWidth: 440, lineHeight: 1.6 }}>Load a member roster (▲ Add Members) or run AI analysis, and the Strategist will surface where your gym is losing members and what to change.</p>
-                  </div>
-                ) : (
-                  <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-                    {insights.findings.map(f => {
-                      const sv = severityMeta[f.severity] || severityMeta.info;
-                      return (
-                        <div key={f.id} style={{ background: "#fff", borderRadius: 14, boxShadow: "0 1px 4px rgba(0,0,0,0.07)", borderLeft: `4px solid ${sv.color}`, padding: "16px 20px" }}>
-                          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
-                            <span style={{ fontSize: 14 }}>{sv.icon}</span>
-                            <span style={{ background: sv.bg, color: sv.color, fontSize: 11, fontWeight: 700, padding: "2px 9px", borderRadius: 20, border: `1px solid ${sv.border}`, textTransform: "uppercase", letterSpacing: 0.5 }}>{sv.chip}</span>
-                            <h3 style={{ margin: 0, fontSize: 15, fontWeight: 700, color: "#1a1a2e" }}>{f.title}</h3>
-                          </div>
-                          <p style={{ margin: "0 0 8px", fontSize: 13, color: "#555", lineHeight: 1.6 }}>{f.detail}</p>
-                          <p style={{ margin: 0, fontSize: 13, color: sv.color, fontWeight: 600, lineHeight: 1.5 }}>→ {f.action}</p>
+                  {/* Why members leave (competitive intel) */}
+                  <section>
+                    <SectionHead isMobile={isMobile} title="Why members leave" sub="From what members tell you in their replies. No location tracking." />
+                    {intelLoading && !intel ? (
+                      <div style={{ ...panel, padding: "36px 24px", textAlign: "center", fontSize: 14, color: T.muted }}>Loading…</div>
+                    ) : !intel || intel.total === 0 ? (
+                      <div style={{ ...panel, padding: "36px 24px", textAlign: "center", fontSize: 14, color: T.muted }}>When a member replies and says why they're leaving or where they're going, it shows up here.</div>
+                    ) : (
+                      <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: 16 }}>
+                        <div style={card(T.purple)}>
+                          <h3 style={h3}>Reasons given</h3>
+                          {Object.entries(reasons).filter(([, n]) => n > 0).sort((a, b) => b[1] - a[1]).map(([key, n]) => {
+                            const pct = Math.round((n / reasonsTotal) * 100);
+                            return (
+                              <div key={key} style={{ marginBottom: 16 }}>
+                                <div style={rowLabel}><span>{reasonMeta[key]?.label || key}</span><span style={{ color: T.muted }}>{n} · {pct}%</span></div>
+                                <Bar pct={pct} color={T.orange} />
+                              </div>
+                            );
+                          })}
+                          <p style={{ margin: "4px 0 0", fontSize: 12, color: T.faint }}>{intel.total} member{intel.total !== 1 ? "s" : ""} shared a reason</p>
                         </div>
-                      );
-                    })}
-                    <p style={{ textAlign: "center", marginTop: 6, fontSize: 12, color: "#aaa", fontStyle: "italic" }}>
-                      Every churn predictor tells you who's leaving. The Strategist reads the AI's read on each member and tells you the <em>pattern</em> — and the fix.
-                    </p>
-                  </div>
-                )}
-              </>
-            )}
-
-            {/* ════════════════════════════════════════════════════════════
-                TAB: COMPETITORS (Competitive Intelligence)
-            ════════════════════════════════════════════════════════════ */}
-            {activeTab === "Competitors" && (() => {
-              const reasons = intel?.reasons || {};
-              const competitors = intel?.competitors || [];
-              // Headline numbers derive straight from the leaderboard, so
-              // "members lost to competitors" always matches the gyms shown.
-              const lostCount = competitors.reduce((a, c) => a + c.members, 0);
-              const lostRev = competitors.reduce((a, c) => a + (c.monthlyValue || 0), 0);
-              const reasonsTotal = Object.values(reasons).reduce((a, b) => a + b, 0);
-              const maxMembers = Math.max(1, ...competitors.map(c => c.members));
-              return (
-                <>
-                  <div style={{ marginBottom: 24 }}>
-                    <h1 style={{ margin: 0, fontSize: 26, fontWeight: 700, color: "#1a1a2e" }}>Competitive Intelligence</h1>
-                    <p style={{ margin: "4px 0 0", color: "#888", fontSize: 14 }}>Where members go when they leave — learned from what they <em>tell</em> the AI in their own replies. No location tracking, ever.</p>
-                  </div>
-
-                  {intelLoading ? (
-                    <div style={{ background: "#fff", borderRadius: 14, boxShadow: "0 1px 4px rgba(0,0,0,0.07)", padding: "48px 24px", textAlign: "center", color: "#888", fontSize: 14 }}>⏳ Gathering competitive signal…</div>
-                  ) : !intel || intel.total === 0 ? (
-                    <div style={{ background: "#fff", borderRadius: 14, boxShadow: "0 1px 4px rgba(0,0,0,0.07)", padding: "48px 24px", textAlign: "center" }}>
-                      <p style={{ fontSize: 32, margin: "0 0 8px" }}>📡</p>
-                      <p style={{ fontSize: 16, fontWeight: 600, color: "#1a1a2e", margin: "0 0 6px" }}>No competitor signal yet</p>
-                      <p style={{ fontSize: 13, color: "#888", margin: "0 auto", maxWidth: 460, lineHeight: 1.6 }}>When an at-risk member replies and mentions where they're headed, the AI captures it here — so you see which gyms are pulling your members, learned from honest conversation rather than surveillance.</p>
-                    </div>
-                  ) : (
-                    <>
-                      <div style={{ display: "grid", gridTemplateColumns: isMobile ? "repeat(2, 1fr)" : "repeat(auto-fit, minmax(200px, 1fr))", gap: isMobile ? 10 : 16, marginBottom: 24 }}>
-                        {[
-                          { label: "Members Lost to Competitors", value: String(lostCount), sub: "named another gym", accent: true },
-                          { label: "Revenue at Risk to Competitors", value: `$${lostRev}/mo`, sub: `≈ $${(lostRev * 12).toLocaleString()}/yr`, accent: lostRev > 0 },
-                          { label: "Members Who Shared Why", value: String(intel.total), sub: "via AI conversation", accent: false },
-                        ].map((c, i) => (
-                          <div key={i} style={{ background: "#fff", borderRadius: 12, padding: isMobile ? "14px 14px" : "20px 22px", boxShadow: "0 1px 4px rgba(0,0,0,0.07)", borderTop: c.accent ? "3px solid #e74c3c" : "3px solid #1a1a2e" }}>
-                            <p style={{ margin: 0, fontSize: isMobile ? 22 : 26, fontWeight: 700, color: c.accent ? "#e74c3c" : "#1a1a2e" }}>{c.value}</p>
-                            <p style={{ margin: "3px 0 0", fontSize: 12, color: "#555" }}>{c.label}</p>
-                            <p style={{ margin: "1px 0 0", fontSize: 11, color: "#aaa" }}>{c.sub}</p>
-                          </div>
-                        ))}
-                      </div>
-
-                      <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: 20 }}>
-                        {/* Where members are going */}
-                        <div style={{ background: "#fff", borderRadius: 14, boxShadow: "0 1px 4px rgba(0,0,0,0.07)", padding: "20px 24px" }}>
-                          <h2 style={{ margin: "0 0 4px", fontSize: 15, fontWeight: 700, color: "#1a1a2e" }}>🎯 Where members are going</h2>
-                          <p style={{ margin: "0 0 16px", fontSize: 12, color: "#aaa" }}>Gyms members named when they left</p>
+                        <div style={card(T.orange)}>
+                          <h3 style={h3}>Gyms they named</h3>
                           {competitors.length === 0 ? (
-                            <p style={{ fontSize: 13, color: "#aaa" }}>No specific competitor named yet — members cited reasons but not a destination.</p>
+                            <p style={{ margin: 0, fontSize: 14, color: T.muted }}>No other gym named yet.</p>
                           ) : competitors.map(c => (
-                            <div key={c.name} style={{ marginBottom: 14 }}>
-                              <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
-                                <span style={{ fontSize: 13, fontWeight: 600, color: "#1a1a2e" }}>{c.name}</span>
-                                <span style={{ fontSize: 12, color: "#c0392b", fontWeight: 600 }}>{c.members} member{c.members !== 1 ? "s" : ""} · ${c.monthlyValue}/mo</span>
-                              </div>
-                              <div style={{ height: 8, background: "#f0f0f0", borderRadius: 4, overflow: "hidden" }}>
-                                <div style={{ width: `${Math.round((c.members / maxMembers) * 100)}%`, height: "100%", background: "linear-gradient(90deg,#e74c3c,#c0392b)", borderRadius: 4, transition: "width 0.5s" }} />
-                              </div>
+                            <div key={c.name} style={{ marginBottom: 16 }}>
+                              <div style={rowLabel}><span style={{ color: T.ink }}>{c.name}</span><span style={{ color: T.muted }}>{c.members} member{c.members !== 1 ? "s" : ""} · ${c.monthlyValue}/mo</span></div>
+                              <Bar pct={Math.round((c.members / maxMembers) * 100)} color={T.red} />
                             </div>
                           ))}
                         </div>
-
-                        {/* Why members leave */}
-                        <div style={{ background: "#fff", borderRadius: 14, boxShadow: "0 1px 4px rgba(0,0,0,0.07)", padding: "20px 24px" }}>
-                          <h2 style={{ margin: "0 0 4px", fontSize: 15, fontWeight: 700, color: "#1a1a2e" }}>💬 Why members leave</h2>
-                          <p style={{ margin: "0 0 16px", fontSize: 12, color: "#aaa" }}>Reasons captured from their replies</p>
-                          {Object.entries(reasons)
-                            .filter(([, n]) => n > 0)
-                            .sort((a, b) => b[1] - a[1])
-                            .map(([key, n]) => {
-                              const rm = reasonMeta[key] || { label: key, color: "#777" };
-                              const pct = Math.round((n / reasonsTotal) * 100);
-                              return (
-                                <div key={key} style={{ marginBottom: 14 }}>
-                                  <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
-                                    <span style={{ fontSize: 13, color: "#555" }}>{rm.label}</span>
-                                    <span style={{ fontSize: 13, fontWeight: 600, color: rm.color }}>{n} ({pct}%)</span>
-                                  </div>
-                                  <div style={{ height: 8, background: "#f0f0f0", borderRadius: 4, overflow: "hidden" }}>
-                                    <div style={{ width: `${pct}%`, height: "100%", background: rm.color, borderRadius: 4, transition: "width 0.5s" }} />
-                                  </div>
-                                </div>
-                              );
-                            })}
-                        </div>
                       </div>
-
-                      <p style={{ textAlign: "center", marginTop: 18, fontSize: 12, color: "#aaa", fontStyle: "italic" }}>
-                        🔒 Privacy by design: this is built entirely from what members choose to share in conversation — never from tracking their location.
-                      </p>
-                    </>
-                  )}
+                    )}
+                  </section>
                 </>
               );
             })()}
 
-            <p style={{ textAlign: "center", marginTop: 24, fontSize: 12, color: "#ccc" }}>PulseRetain · Powered by Claude AI · Demo roster (synthetic) — Mindbody/Glofox sync on roadmap</p>
-          </div>
+            <p style={{ textAlign: "center", marginTop: 32, fontSize: 12, color: T.faint }}>PulseRetain{IS_DEMO || !usingImported ? " · Sample roster" : ""}</p>
+          </main>
 
           {/* ── Add / Import Members Modal ── */}
           {showData && (() => {
-            const inputStyle = { width: "100%", boxSizing: "border-box", padding: "8px 10px", border: "1px solid #ddd", borderRadius: 8, fontSize: 13, fontFamily: "inherit", outline: "none" };
+            const inputStyle = { width: "100%", boxSizing: "border-box", padding: "8px 10px", border: `1px solid ${T.line}`, borderRadius: 8, fontSize: 14, fontFamily: SANS, outline: "none", color: T.ink };
             const tabBtn = (key, label) => (
-              <button key={key} onClick={() => setDataTab(key)} style={{ flex: 1, background: dataTab === key ? "#1a1a2e" : "#f3f4f7", color: dataTab === key ? "#fff" : "#555", border: "none", borderRadius: 8, padding: "8px 6px", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>{label}</button>
+              <button key={key} onClick={() => setDataTab(key)} style={{ flex: 1, background: dataTab === key ? "#fff" : "transparent", color: dataTab === key ? T.ink : T.muted, border: "none", boxShadow: dataTab === key ? "0 1px 2px rgba(0,0,0,0.08)" : "none", borderRadius: 6, padding: "7px 6px", fontFamily: SANS, fontSize: 13, fontWeight: dataTab === key ? 600 : 400, cursor: "pointer" }}>{label}</button>
             );
             const addFields = [
               { key: "name", label: "Full name", ph: "Jordan Smith", full: true },
@@ -1722,69 +1582,64 @@ export default function App() {
               { key: "phone", label: "Phone (optional)", ph: "(704) 555-0100" },
             ];
             return (
-              <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 200, padding: 16 }} onClick={() => setShowData(false)}>
-                <div role="dialog" aria-modal="true" aria-label="Add members" style={{ background: "#fff", borderRadius: 16, padding: "24px 26px", maxWidth: 560, width: "100%", maxHeight: "88vh", overflowY: "auto", boxShadow: "0 20px 60px rgba(0,0,0,0.25)" }} onClick={e => e.stopPropagation()}>
-                  <div style={{ display: "flex", alignItems: "center", marginBottom: 4 }}>
-                    <h2 style={{ margin: 0, fontSize: 19, fontWeight: 700, color: "#1a1a2e" }}>Add members</h2>
-                    <span style={{ marginLeft: 10, fontSize: 12, color: "#aaa" }}>roster: {members.length}</span>
-                    <button autoFocus onClick={() => setShowData(false)} aria-label="Close" style={{ marginLeft: "auto", background: "none", border: "none", fontSize: 22, cursor: "pointer", color: "#aaa" }}>×</button>
+              <div style={{ position: "fixed", inset: 0, background: "rgba(26,26,46,0.4)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 200, padding: 16 }} onClick={() => setShowData(false)}>
+                <div role="dialog" aria-modal="true" aria-label="Add members" style={{ background: "#fff", borderRadius: 14, padding: "26px 28px", maxWidth: 560, width: "100%", maxHeight: "88vh", overflowY: "auto", boxShadow: "0 20px 60px rgba(0,0,0,0.18)", fontFamily: SANS }} onClick={e => e.stopPropagation()}>
+                  <div style={{ display: "flex", alignItems: "center", marginBottom: 6 }}>
+                    <h2 style={{ margin: 0, fontFamily: SERIF, fontSize: 22, fontWeight: 400, color: T.ink }}>Add members</h2>
+                    <span style={{ marginLeft: 10, fontSize: 13, color: T.faint }}>{members.length} on your roster</span>
+                    <button autoFocus onClick={() => setShowData(false)} aria-label="Close" style={{ marginLeft: "auto", background: "none", border: "none", fontSize: 22, cursor: "pointer", color: T.faint }}>×</button>
                   </div>
-                  <p style={{ margin: "0 0 16px", fontSize: 13, color: "#888" }}>Drop in real member data and the dashboard, analytics, and AI run on it instantly. Parsed in your browser — never uploaded.</p>
+                  <p style={{ margin: "0 0 18px", fontSize: 14, color: T.muted, lineHeight: 1.5 }}>Bring in your member list. It's read in your browser and never uploaded.</p>
 
-                  <div style={{ display: "flex", gap: 6, marginBottom: 18 }}>
-                    {tabBtn("sample", "⚡ Sample gym")}
-                    {tabBtn("upload", "⬆ Upload CSV")}
-                    {tabBtn("paste", "📋 Paste list")}
-                    {tabBtn("single", "✏️ Add one")}
+                  <div style={{ display: "flex", gap: 2, marginBottom: 20, background: T.soft, borderRadius: 8, padding: 3 }}>
+                    {tabBtn("sample", "Sample gym")}
+                    {tabBtn("upload", "Upload CSV")}
+                    {tabBtn("paste", "Paste list")}
+                    {tabBtn("single", "Add one")}
                   </div>
 
                   {dataTab === "sample" && (
-                    <div style={{ textAlign: "center", padding: "8px 0 4px" }}>
-                      <p style={{ fontSize: 13, color: "#555", lineHeight: 1.6, margin: "0 0 16px" }}>Load a realistic <strong>20-member boutique studio</strong> — a healthy mix of at-risk, drifting, and loyal members — and watch the risk monitor and analytics populate in one click.</p>
-                      <button onClick={loadSampleGym} style={{ background: "linear-gradient(135deg,#e74c3c,#c0392b)", color: "#fff", border: "none", borderRadius: 10, padding: "12px 24px", fontSize: 14, fontWeight: 700, cursor: "pointer", boxShadow: "0 4px 14px rgba(231,76,60,0.35)" }}>⚡ Load 20-member sample gym</button>
+                    <div>
+                      <p style={{ fontSize: 14, color: T.body, lineHeight: 1.6, margin: "0 0 16px" }}>Load a 20-member sample studio with a mix of at-risk, drifting and loyal members.</p>
+                      <button onClick={loadSampleGym} style={btn("primary")}>Load sample gym</button>
                     </div>
                   )}
 
                   {dataTab === "upload" && (
-                    <div style={{ textAlign: "center", padding: "8px 0 4px" }}>
+                    <div>
                       <input ref={importInputRef} type="file" accept=".csv,text/csv" onChange={handleImportFile} style={{ display: "none" }} aria-hidden="true" />
-                      <p style={{ fontSize: 13, color: "#555", lineHeight: 1.6, margin: "0 0 16px" }}>Upload a CSV exported from Mindbody, Glofox, ABC, PushPress, or any spreadsheet. Columns are auto-detected (name, last visit, plan, etc.).</p>
-                      <button onClick={() => importInputRef.current && importInputRef.current.click()} style={{ background: "#1a1a2e", color: "#fff", border: "none", borderRadius: 10, padding: "12px 24px", fontSize: 14, fontWeight: 700, cursor: "pointer" }}>⬆ Choose CSV file</button>
+                      <p style={{ fontSize: 14, color: T.body, lineHeight: 1.6, margin: "0 0 16px" }}>Upload a CSV exported from Mindbody, Glofox, ABC, PushPress or any spreadsheet. Columns are detected automatically.</p>
+                      <button onClick={() => importInputRef.current && importInputRef.current.click()} style={btn("primary")}>Choose CSV file</button>
                     </div>
                   )}
 
                   {dataTab === "paste" && (
                     <div>
-                      <p style={{ fontSize: 13, color: "#555", margin: "0 0 8px" }}>Paste rows from your spreadsheet, <strong>including the header row</strong>:</p>
-                      <textarea
-                        value={pasteText}
-                        onChange={e => setPasteText(e.target.value)}
+                      <p style={{ fontSize: 14, color: T.body, margin: "0 0 8px" }}>Paste rows from your spreadsheet, including the header row.</p>
+                      <textarea value={pasteText} onChange={e => setPasteText(e.target.value)}
                         placeholder={"Name, Plan, Monthly Value, Last Visit, Join Date, Missed Payments, Classes Booked\nJordan Smith, Unlimited Monthly, 159, 2026-06-08, 2024-03-01, 0, 2"}
-                        rows={7}
-                        style={{ ...inputStyle, resize: "vertical", fontFamily: "monospace", fontSize: 12 }}
-                      />
-                      <button onClick={loadPastedRoster} disabled={!pasteText.trim()} style={{ marginTop: 10, background: pasteText.trim() ? "#1a1a2e" : "#ccc", color: "#fff", border: "none", borderRadius: 10, padding: "10px 20px", fontSize: 13, fontWeight: 700, cursor: pasteText.trim() ? "pointer" : "not-allowed" }}>Load these members</button>
+                        rows={7} style={{ ...inputStyle, resize: "vertical", fontFamily: "monospace", fontSize: 12 }} />
+                      <button onClick={loadPastedRoster} disabled={!pasteText.trim()} style={btn("primary", { marginTop: 10, ...(!pasteText.trim() ? { opacity: 0.4, cursor: "not-allowed" } : {}) })}>Load these members</button>
                     </div>
                   )}
 
                   {dataTab === "single" && (
                     <div>
-                      <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: 10 }}>
+                      <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: 12 }}>
                         {addFields.map(f => (
                           <div key={f.key} style={{ gridColumn: f.full ? "1 / -1" : "auto" }}>
-                            <label style={{ display: "block", fontSize: 11, fontWeight: 600, color: "#888", marginBottom: 3 }}>{f.label}</label>
+                            <label style={{ display: "block", fontSize: 12, color: T.muted, marginBottom: 4 }}>{f.label}</label>
                             <input value={addForm[f.key]} onChange={e => setAddForm(p => ({ ...p, [f.key]: e.target.value }))} placeholder={f.ph} style={inputStyle} />
                           </div>
                         ))}
                       </div>
-                      <button onClick={addSingleMember} disabled={!addForm.name.trim()} style={{ marginTop: 14, background: addForm.name.trim() ? "linear-gradient(135deg,#27ae60,#1e7e45)" : "#ccc", color: "#fff", border: "none", borderRadius: 10, padding: "10px 20px", fontSize: 13, fontWeight: 700, cursor: addForm.name.trim() ? "pointer" : "not-allowed" }}>➕ Add member</button>
-                      <span style={{ marginLeft: 12, fontSize: 12, color: "#aaa" }}>Adds to your roster — keep going to add several.</span>
+                      <button onClick={addSingleMember} disabled={!addForm.name.trim()} style={btn("primary", { marginTop: 16, ...(!addForm.name.trim() ? { opacity: 0.4, cursor: "not-allowed" } : {}) })}>Add member</button>
                     </div>
                   )}
 
-                  <div style={{ marginTop: 20, paddingTop: 14, borderTop: "1px solid #f0f0f0", display: "flex", alignItems: "center", gap: 12 }}>
-                    <button onClick={downloadImportTemplate} style={{ background: "none", color: "#185fa5", border: "none", fontSize: 12, cursor: "pointer", textDecoration: "underline", padding: 0 }}>⬇ Download CSV template</button>
-                    {usingImported && <button onClick={resetToDemo} style={{ marginLeft: "auto", background: "none", color: "#888", border: "none", fontSize: 12, cursor: "pointer", textDecoration: "underline", padding: 0 }}>↺ reset to demo roster</button>}
+                  <div style={{ marginTop: 22, paddingTop: 14, borderTop: `1px solid ${T.line}`, display: "flex", alignItems: "center", gap: 12 }}>
+                    <button onClick={downloadImportTemplate} style={{ background: "none", color: T.ink, border: "none", fontFamily: SANS, fontSize: 13, cursor: "pointer", textDecoration: "underline", padding: 0 }}>Download CSV template</button>
+                    {usingImported && <button onClick={resetToDemo} style={{ marginLeft: "auto", background: "none", color: T.muted, border: "none", fontFamily: SANS, fontSize: 13, cursor: "pointer", textDecoration: "underline", padding: 0 }}>Reset to demo roster</button>}
                   </div>
                 </div>
               </div>
@@ -1795,42 +1650,38 @@ export default function App() {
           {modalMember && (() => {
             const m  = modalMember;
             const ai = aiResults[m.id];
-            const rc = riskConfig[deriveRisk(m, ai)];
             return (
-              <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 200 }} onClick={() => setModalMember(null)}>
-                <div role="dialog" aria-modal="true" aria-label={`Member details for ${m.name}`} style={{ background: "#fff", borderRadius: 16, padding: "28px 32px", maxWidth: 480, width: "90%", boxShadow: "0 20px 60px rgba(0,0,0,0.2)" }} onClick={e => e.stopPropagation()}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 20 }}>
-                    <div style={{ width: 48, height: 48, borderRadius: "50%", background: rc.bg, color: rc.color, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16, fontWeight: 700, border: `2px solid ${rc.border}` }}>{m.initials}</div>
+              <div style={{ position: "fixed", inset: 0, background: "rgba(26,26,46,0.4)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 200 }} onClick={() => setModalMember(null)}>
+                <div role="dialog" aria-modal="true" aria-label={`Member details for ${m.name}`} style={{ background: "#fff", borderRadius: 14, padding: "26px 28px", maxWidth: 480, width: "90%", boxShadow: "0 20px 60px rgba(0,0,0,0.18)", fontFamily: SANS }} onClick={e => e.stopPropagation()}>
+                  <div style={{ display: "flex", alignItems: "flex-start", gap: 14, marginBottom: 20 }}>
                     <div>
-                      <p style={{ margin: 0, fontSize: 18, fontWeight: 700, color: "#1a1a2e" }}>{m.name}</p>
-                      <p style={{ margin: "2px 0 0", fontSize: 13, color: "#888" }}>{m.plan} · ${m.value}/mo</p>
+                      <p style={{ margin: 0, fontFamily: SERIF, fontSize: 22, color: T.ink }}>{m.name}</p>
+                      <p style={{ margin: "4px 0 0", fontSize: 14, color: T.muted }}>{m.plan} · ${m.value}/mo</p>
                     </div>
-                    <button autoFocus onClick={() => setModalMember(null)} aria-label="Close member details" style={{ marginLeft: "auto", background: "none", border: "none", fontSize: 20, cursor: "pointer", color: "#aaa" }}>×</button>
+                    <button autoFocus onClick={() => setModalMember(null)} aria-label="Close member details" style={{ marginLeft: "auto", background: "none", border: "none", fontSize: 22, cursor: "pointer", color: T.faint }}>×</button>
                   </div>
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 16 }}>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "16px 20px", marginBottom: 20 }}>
                     {[
-                      { label: "Email",         value: m.email },
-                      { label: "Phone",         value: m.phone },
-                      { label: "Last Visit",    value: m.lastVisit },
-                      { label: "Usual Schedule",value: m.usualVisits },
-                      { label: "Member Since",  value: `${m.joinedMonths} months` },
-                      { label: "Missed Payments", value: m.missedPayments === 0 ? "None" : `${m.missedPayments}` },
+                      { label: "Email",           value: m.email },
+                      { label: "Phone",           value: m.phone },
+                      { label: "Last visit",      value: m.lastVisit },
+                      { label: "Usual schedule",  value: m.usualVisits },
+                      { label: "Member for",      value: `${m.joinedMonths} months` },
+                      { label: "Missed payments", value: m.missedPayments === 0 ? "None" : `${m.missedPayments}` },
                     ].map(f => (
-                      <div key={f.label} style={{ background: "#fafafa", borderRadius: 8, padding: "10px 12px" }}>
-                        <p style={{ margin: 0, fontSize: 10, color: "#aaa", textTransform: "uppercase", letterSpacing: 0.5, fontWeight: 600 }}>{f.label}</p>
-                        <p style={{ margin: "3px 0 0", fontSize: 13, color: "#333", fontWeight: 500 }}>{f.value}</p>
+                      <div key={f.label}>
+                        <p style={eyebrow}>{f.label}</p>
+                        <p style={{ margin: "3px 0 0", fontSize: 14, color: T.ink, wordBreak: "break-word" }}>{f.value || "—"}</p>
                       </div>
                     ))}
                   </div>
                   {ai && !ai.error ? (
-                    <div style={{ background: "#fff8e1", border: "1px solid #fde8a8", borderRadius: 10, padding: "12px 14px" }}>
-                      <p style={{ margin: "0 0 4px", fontSize: 11, fontWeight: 600, color: "#b7770d", textTransform: "uppercase", letterSpacing: 0.5 }}>AI Churn Insight</p>
-                      <p style={{ margin: 0, fontSize: 13, color: "#555", lineHeight: 1.6 }}>{ai.reason}</p>
+                    <div style={{ borderTop: `1px solid ${T.line}`, paddingTop: 16 }}>
+                      <p style={eyebrow}>Why they're at risk</p>
+                      <p style={{ margin: "4px 0 0", fontSize: 14, color: T.body, lineHeight: 1.6 }}>{ai.reason}</p>
                     </div>
                   ) : (
-                    <button onClick={() => { analyzeOne(m); setModalMember(null); }} style={{ width: "100%", background: "linear-gradient(135deg,#e74c3c,#c0392b)", color: "#fff", border: "none", borderRadius: 10, padding: "11px 0", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>
-                      ⚡ Run AI Analysis for {m.name.split(" ")[0]}
-                    </button>
+                    <button onClick={() => { analyzeOne(m); setModalMember(null); }} style={btn("primary", { width: "100%", padding: "11px 0" })}>Analyze {firstOf(m)}</button>
                   )}
                 </div>
               </div>
@@ -1856,7 +1707,7 @@ export default function App() {
           </p>
         </div>
         {install.canInstall ? (
-          <button onClick={install.promptInstall} style={{ background: "linear-gradient(135deg,#e74c3c,#c0392b)", color: "#fff", border: "none", borderRadius: 10, padding: "9px 18px", fontSize: 13, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap", flexShrink: 0 }}>Install</button>
+          <button onClick={install.promptInstall} style={{ background: "#e74c3c", color: "#fff", border: "none", borderRadius: 8, padding: "9px 18px", fontSize: 13, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap", flexShrink: 0 }}>Install</button>
         ) : (
           <svg width="20" height="24" viewBox="0 0 20 24" fill="none" stroke="#fff" strokeWidth="1.7" aria-hidden="true" style={{ flexShrink: 0 }}>
             <path d="M10 2 V14 M6 6 L10 2 L14 6" strokeLinecap="round" strokeLinejoin="round" />
