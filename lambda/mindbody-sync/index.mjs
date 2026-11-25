@@ -294,28 +294,53 @@ async function scanAll(params) {
   return items;
 }
 
-// PROVISIONAL member store. The "Save imported members on the server" work
-// defines the real member schema; this writes into the same members table the
-// AI results already use (key "<tenantId>#<memberId>") and only touches the
-// `member` attribute, so an existing `aiResult` on the item is preserved.
-// Swap these two functions for that work's helpers once it lands.
+// Member store — matches the roster schema in lambda/index.mjs (the "Save
+// imported members on the server" work): one item per member in
+// pulseretain-members, key "<tenantId>#<id>", the dashboard's fields under
+// `profile`, `aiResult` written separately by the analyze route. We use
+// UpdateItem so an existing aiResult and sortOrder survive every sync.
+// Sync-only bookkeeping lives under `mbSync` so the profile stays exactly the
+// shape the dashboard expects (its cleaner drops unknown profile fields).
+const PROFILE_FIELDS = ["id", "name", "initials", "plan", "lastVisit", "usualVisits", "risk", "score", "value",
+  "email", "phone", "joinedMonths", "missedPayments", "classesBooked", "location", "source", "externalId", "lastVisitDate"];
+const SYNC_FIELDS = ["siteId", "lastVisitAt", "visitsSyncedAt", "active", "smsOptIn"];
+const capStr = (v) => (typeof v === "string" ? v.slice(0, 200) : v);
+
+// Split a synced member into the stored { profile, mbSync } pair.
+export function toStoredMember(m) {
+  const profile = {}, mbSync = {};
+  for (const k of PROFILE_FIELDS) if (m[k] !== undefined) profile[k] = capStr(m[k]);
+  profile.lastVisitDate = m.lastVisitAt ? m.lastVisitAt.slice(0, 10) : null;
+  for (const k of SYNC_FIELDS) if (m[k] !== undefined) mbSync[k] = m[k];
+  return { profile, mbSync };
+}
+
+// Rebuild the "existing" member mapClientToMember expects from a stored item.
+export function fromStoredItem(item) {
+  const p = item.profile || {};
+  return { ...p, ...(item.mbSync || {}), lastVisitAt: item.mbSync?.lastVisitAt ?? (p.lastVisitDate ? `${p.lastVisitDate}T00:00:00.000Z` : null) };
+}
+
 export const dynamoStore = {
   async loadMembers(tenantId) {
     const items = await scanAll({ TableName: MEMBERS_TABLE, FilterExpression: "tenantId = :t", ExpressionAttributeValues: { ":t": tenantId } });
     const byId = {};
-    for (const i of items) if (i.member?.id) byId[i.member.id] = i.member;
+    for (const i of items) if (i.profile?.id) byId[i.profile.id] = fromStoredItem(i);
     return byId;
   },
   async upsertMembers(tenantId, members) {
     const { doc, lib } = await ddb();
     const now = new Date().toISOString();
-    await mapLimit(members, 10, (m) => doc.send(new lib.UpdateCommand({
-      TableName: MEMBERS_TABLE,
-      Key: { memberId: `${tenantId}#${m.id}` },
-      UpdateExpression: "SET #m = :m, tenantId = :t, rawMemberId = :r, memberUpdatedAt = :u",
-      ExpressionAttributeNames: { "#m": "member" },
-      ExpressionAttributeValues: { ":m": m, ":t": tenantId, ":r": m.id, ":u": now },
-    })));
+    await mapLimit(members, 10, (m) => {
+      const { profile, mbSync } = toStoredMember(m);
+      return doc.send(new lib.UpdateCommand({
+        TableName: MEMBERS_TABLE,
+        Key: { memberId: `${tenantId}#${m.id}` },
+        // New members sort after the existing roster (keeps owner ordering).
+        UpdateExpression: "SET profile = :p, mbSync = :s, tenantId = :t, rawMemberId = :r, updatedAt = :u, sortOrder = if_not_exists(sortOrder, :o)",
+        ExpressionAttributeValues: { ":p": profile, ":s": mbSync, ":t": tenantId, ":r": m.id, ":u": now, ":o": 1e9 },
+      }));
+    });
   },
   async saveSyncState(tenantId, state) {
     const { doc, lib } = await ddb();

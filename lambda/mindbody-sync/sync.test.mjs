@@ -5,6 +5,7 @@ import { readFile } from "node:fs/promises";
 import {
   scoreMember, summarizeVisits, pickPlan, mapClientToMember, chooseVisitRefresh,
   summarizeRun, createMindbodyClient, syncTenant, stableMemberId,
+  toStoredMember, fromStoredItem,
 } from "./index.mjs";
 
 const NOW = Date.parse("2026-11-25T12:00:00Z");
@@ -140,4 +141,24 @@ test("syncTenant end to end with fakes", async () => {
   assert.equal(summary.newlyHigh, 1);
   assert.equal(summary.visitCalls, 2);
   assert.equal(saved.state.lastResult, "ok");
+});
+
+test("stored item round-trips: dashboard profile + sync bookkeeping", () => {
+  const m = mapClientToMember({
+    siteId: "-99", nowMs: NOW, client: { Id: "5", FirstName: "Jo", LastName: "Lee" },
+    visits: [{ StartDateTime: daysAgo(3), SignedIn: true }],
+  });
+  const { profile, mbSync } = toStoredMember(m);
+  assert.equal(profile.id, "mb--99-5");
+  assert.equal(profile.source, "mindbody");
+  assert.equal(profile.lastVisitDate, daysAgo(3).slice(0, 10));
+  assert.equal(profile.previousRisk, undefined);      // not a dashboard field
+  assert.equal(profile.visitsSyncedAt, undefined);    // lives in mbSync
+  assert.equal(mbSync.visitsSyncedAt, new Date(NOW).toISOString());
+  assert.match(profile.id, /^(m_|mb-)[A-Za-z0-9_-]{1,80}$/); // roster store's id rule
+  const back = fromStoredItem({ profile, mbSync });
+  assert.equal(back.lastVisitAt, m.lastVisitAt);
+  assert.equal(back.risk, m.risk);
+  // Item saved by a CSV import (no mbSync) still yields a usable last visit.
+  assert.equal(fromStoredItem({ profile: { lastVisitDate: "2026-11-20" } }).lastVisitAt, "2026-11-20T00:00:00.000Z");
 });

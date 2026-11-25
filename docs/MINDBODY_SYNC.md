@@ -37,15 +37,19 @@ EventBridge Scheduler (nightly)
 - **Failures:** one gym failing doesn't stop the others; the error is stored on that
   gym's config item (`lastResult: "error"`, `lastError`). Rate limits (429) retry with backoff.
 
-## Depends on server-side member storage
+## Member storage
 
-The dashboard currently keeps the roster in browser memory. The "Save imported
-members on the server" work is adding a real member store. Until that lands, the
-sync writes a provisional `member` attribute onto items in `pulseretain-members`
-(key `<tenantId>#<memberId>`), using an update that leaves any saved `aiResult`
-untouched. `dynamoStore.loadMembers` / `upsertMembers` are the only two functions
-to swap once the real schema is settled. The dashboard won't show synced members
-until it reads members from the server.
+Synced members use the roster store from the "Save imported members on the
+server" work: one item per member in `pulseretain-members`, key
+`<tenantId>#mb-<siteId>-<clientId>`, dashboard fields under `profile`
+(`source: "mindbody"`, `externalId` = Mindbody client id). Sync-only bookkeeping
+(exact last-visit time, when visits were last fetched, active flag) is kept under
+`mbSync` so the profile stays the shape the dashboard expects. Writes are
+UpdateItem, so a saved `aiResult` and the owner's `sortOrder` survive every sync.
+
+**Watch out:** the CSV import's "replace" mode deletes every member item for the
+gym, which would also wipe synced members until the next nightly run. Replace
+should only delete non-Mindbody (`m_`) members for gyms that use the sync.
 
 ## Setting up a gym (by hand for v1)
 
