@@ -47,9 +47,10 @@ server" work: one item per member in `pulseretain-members`, key
 `mbSync` so the profile stays the shape the dashboard expects. Writes are
 UpdateItem, so a saved `aiResult` and the owner's `sortOrder` survive every sync.
 
-**Watch out:** the CSV import's "replace" mode deletes every member item for the
-gym, which would also wipe synced members until the next nightly run. Replace
-should only delete non-Mindbody (`m_`) members for gyms that use the sync.
+The CSV import's "replace" mode deletes only non-Mindbody members, so imports
+don't wipe synced members. The dashboard's "reset to demo" removes everything,
+including synced members; the next nightly run brings them back (without any
+saved AI results).
 
 ## Setting up a gym (by hand for v1)
 
