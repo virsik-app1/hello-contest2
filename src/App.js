@@ -91,6 +91,22 @@ async function serverError(response) {
   return new Error(msg);
 }
 
+// ─── Follow-up / time zone display helpers ───────────────────────────────────
+// "Sat, Nov 28, 10:00 AM" in the gym's zone (falls back to the browser's).
+function formatDue(iso, tz) {
+  if (!iso) return "";
+  const opts = { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" };
+  try { return new Date(iso).toLocaleString(undefined, { ...opts, timeZone: tz || undefined }); }
+  catch { return new Date(iso).toLocaleString(undefined, opts); }
+}
+// North American zones first (where gyms are today), then the current one if not listed.
+const COMMON_TZS = ["America/New_York", "America/Chicago", "America/Denver", "America/Phoenix", "America/Los_Angeles",
+  "America/Anchorage", "Pacific/Honolulu", "America/Puerto_Rico", "America/Toronto", "America/Vancouver", "America/Halifax",
+  "Europe/London", "Australia/Sydney"];
+function timeZoneOptions(current) {
+  return current && !COMMON_TZS.includes(current) ? [current, ...COMMON_TZS] : COMMON_TZS;
+}
+
 // ─── Member data ────────────────────────────────────────────────────────────
 const initialMembers = [
   { id: 1,  name: "Sarah Reynolds",  initials: "SR", plan: "Unlimited Monthly", lastVisit: "9 days ago",  usualVisits: "Tue & Thu",      risk: "high",   score: 91, value: 79,  email: "sarah.r@email.com",  phone: "(704) 555-0192", joinedMonths: 14, missedPayments: 0, classesBooked: 2, location: "Downtown" },
@@ -378,6 +394,8 @@ export default function App() {
   const [filterLocation, setFilterLocation] = useState(ALL_LOCATIONS); // multi-location: which site is in view
   const [modalMember, setModalMember] = useState(null);
   const [scheduledIds, setScheduledIds] = useState(new Set());
+  const [followupDue, setFollowupDue]   = useState({});   // member id → ISO time the follow-up text goes out
+  const [gymTz, setGymTz]               = useState(null); // gym's time zone (quiet hours + follow-up timing)
   const [smsSending, setSmsSending]   = useState({});
   const [smsSent, setSmsSent]         = useState(new Set());
   const [intel, setIntel]             = useState(null);   // competitive-intel aggregate
@@ -444,6 +462,47 @@ export default function App() {
     loadData();
     return () => { cancelled = true; };
   }, [authStatus]);
+
+  // ── Gym time zone + pending follow-ups ────────────────────────────────────
+  // GUESS: a gym that has never chosen a time zone gets the owner's browser zone
+  // saved on first sign-in (they can change it on the Outreach tab).
+  useEffect(() => {
+    if (IS_DEMO || authStatus !== "authenticated") return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const settings = await (await apiFetch({ action: "get_settings" })).json();
+        let tz = settings.timezone;
+        const browserTz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+        if (!tz && browserTz) {
+          const r = await apiFetch({ action: "save_settings", timezone: browserTz });
+          tz = r.ok ? browserTz : settings.effectiveTimezone;
+        }
+        if (!cancelled) setGymTz(tz || settings.effectiveTimezone || null);
+        const { followups = [] } = await (await apiFetch({ action: "list_followups" })).json();
+        if (cancelled) return;
+        const pending = followups.filter(f => f.status === "scheduled" || f.status === "sending");
+        setScheduledIds(new Set(pending.map(f => Number(f.memberId))));
+        setFollowupDue(Object.fromEntries(pending.map(f => [Number(f.memberId), f.dueAt])));
+      } catch (err) {
+        console.error("Failed to load follow-ups/settings:", err);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [authStatus]);
+
+  async function changeGymTz(tz) {
+    const prev = gymTz;
+    setGymTz(tz);
+    try {
+      const r = await apiFetch({ action: "save_settings", timezone: tz });
+      if (!r.ok) throw await serverError(r);
+      showToast(`✓ Texting hours now follow ${tz.replace(/_/g, " ")}`);
+    } catch (err) {
+      setGymTz(prev);
+      showToast(`❌ Couldn't save time zone: ${err.message}`);
+    }
+  }
 
   // ── Load a member's conversation thread when their row is expanded ────────
   useEffect(() => {
@@ -608,12 +667,43 @@ export default function App() {
     } catch (err) {
       console.error("Failed to update outreach status:", err);
     }
-    if (status === "recovered") showToast("🎉 Member marked as recovered!");
+    if (status === "recovered") {
+      showToast("🎉 Member marked as recovered!");
+      // A recovered member shouldn't get the "we miss you" follow-up.
+      const memberId = outreachLog.find(o => o.id === logId)?.memberId;
+      if (memberId != null && scheduledIds.has(memberId)) cancelFollowUp(memberId, true);
+    }
   }
 
-  function scheduleFollowUp(member, ai) {
-    setScheduledIds(prev => new Set([...prev, member.id]));
-    showToast(`⏰ Follow-up scheduled in ${ai.followUpDays || 3} days for ${member.name.split(" ")[0]}`);
+  // Schedules a real follow-up text: the server sends it N days from now at
+  // 10am gym time, after re-checking opt-out, quiet hours and the daily limit.
+  // Demo mode and sample (555) members stay a local reminder — nobody is texted.
+  async function scheduleFollowUp(member, ai) {
+    const first = member.name.split(" ")[0];
+    const days  = ai.followUpDays || 3;
+    if (IS_DEMO || !member.phone || isDemoPhone(member.phone)) {
+      setScheduledIds(prev => new Set([...prev, member.id]));
+      showToast(`⏰ Follow-up noted in ${days} days for ${first}${member.phone ? " (sample member — no real text)" : " (no phone on file)"}`);
+      return;
+    }
+    try {
+      const r = await apiFetch({ action: "schedule_followup", memberId: member.id, memberName: member.name, phone: member.phone, followUpDays: days });
+      if (!r.ok) throw await serverError(r);
+      const { followup } = await r.json();
+      setScheduledIds(prev => new Set([...prev, member.id]));
+      setFollowupDue(prev => ({ ...prev, [member.id]: followup.dueAt }));
+      showToast(`⏰ Follow-up text to ${first} goes out ${formatDue(followup.dueAt, followup.timezone)}`);
+    } catch (err) {
+      showToast(`❌ Couldn't schedule follow-up: ${err.message}`);
+    }
+  }
+
+  async function cancelFollowUp(memberId, quiet = false) {
+    setScheduledIds(prev => { const n = new Set(prev); n.delete(memberId); return n; });
+    setFollowupDue(prev => { const n = { ...prev }; delete n[memberId]; return n; });
+    try { await apiFetch({ action: "cancel_followup", memberId }); }
+    catch (err) { console.error("Failed to cancel follow-up:", err); }
+    if (!quiet) showToast("Follow-up cancelled");
   }
 
   async function handleSendSMS(member, ai) {
@@ -1247,6 +1337,12 @@ export default function App() {
                                       📨 Log Only (no SMS)
                                     </button>
                                   )}
+                                  {scheduled && followupDue[m.id] && (
+                                    <span style={{ fontSize: 12, color: "#8e44ad", display: "flex", alignItems: "center", gap: 6 }}>
+                                      ⏰ Follow-up text {formatDue(followupDue[m.id], gymTz)}
+                                      <button onClick={() => cancelFollowUp(m.id)} style={{ fontSize: 11, padding: "2px 8px", borderRadius: 5, border: "1px solid #d7b9f5", background: "#fff", color: "#8e44ad", cursor: "pointer" }}>Cancel</button>
+                                    </span>
+                                  )}
                                   {!scheduled && (
                                     <button onClick={() => scheduleFollowUp(m, ai)} style={{ background: "#f5f0ff", color: "#8e44ad", border: "1px solid #d7b9f5", borderRadius: 8, padding: "8px 16px", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
                                       ⏰ Schedule Follow-up ({ai.followUpDays || 3}d)
@@ -1354,6 +1450,14 @@ export default function App() {
                   <div>
                     <h1 style={{ margin: 0, fontSize: 26, fontWeight: 700, color: "#1a1a2e" }}>Outreach Log</h1>
                     <p style={{ margin: "4px 0 0", color: "#888", fontSize: 14 }}>Track every message sent and its outcome</p>
+                    {!IS_DEMO && gymTz && (
+                      <label style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 10, fontSize: 12, color: "#666", flexWrap: "wrap" }}>
+                        Texts only go out 8am–9pm in
+                        <select value={gymTz} onChange={e => changeGymTz(e.target.value)} aria-label="Gym time zone" style={{ fontSize: 12, padding: "4px 6px", borderRadius: 6, border: "1px solid #ddd", background: "#fff", maxWidth: "100%" }}>
+                          {timeZoneOptions(gymTz).map(z => <option key={z} value={z}>{z.replace(/_/g, " ")}</option>)}
+                        </select>
+                      </label>
+                    )}
                   </div>
                   {outreachLog.length > 0 && (
                     <button onClick={exportOutreachCSV} aria-label="Export outreach log as CSV" style={{ background: "#fff", color: "#1a1a2e", border: "1px solid #ddd", borderRadius: 10, padding: "10px 16px", fontSize: 13, fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap" }}>⬇ Export CSV</button>
