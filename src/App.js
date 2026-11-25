@@ -9,6 +9,7 @@ import { isStableId, newMemberId, withStableIds, normalizeMemberId, restoreResul
 import { computeInsights } from "./strategist";
 import { IS_DEMO, exitDemoToSignUp, demoAnalyze, demoDraftReply, demoGetConversation, demoLogReplySent, demoCompetitiveIntel, demoInitialAiResults, demoInitialOutreach, demoInbox, demoMarkReplyHandled } from "./demo";
 import { listLocations, filterByLocation, summarizeLocations, ALL_LOCATIONS } from "./locations";
+import { aiErrorText } from "./aiErrors";
 import { useState, useMemo, useEffect, useRef, useCallback } from "react";
 
 Amplify.configure(awsConfig);
@@ -957,8 +958,8 @@ export default function App() {
       try {
         const result = await runClaudeAnalysis(m);
         setAiResults(prev => ({ ...prev, [m.id]: result }));
-      } catch {
-        setAiResults(prev => ({ ...prev, [m.id]: { error: "Couldn't reach the AI just now. Please try again." } }));
+      } catch (err) {
+        setAiResults(prev => ({ ...prev, [m.id]: { error: aiErrorText(err) } }));
       }
       setLoading(prev => ({ ...prev, [m.id]: false }));
     }
@@ -971,8 +972,8 @@ export default function App() {
     try {
       const result = await runClaudeAnalysis(member);
       setAiResults(prev => ({ ...prev, [member.id]: result }));
-    } catch {
-      setAiResults(prev => ({ ...prev, [member.id]: { error: "Couldn't reach the AI just now. Please try again." } }));
+    } catch (err) {
+      setAiResults(prev => ({ ...prev, [member.id]: { error: aiErrorText(err) } }));
     }
     setLoading(prev => ({ ...prev, [member.id]: false }));
   };
@@ -992,8 +993,8 @@ export default function App() {
       try {
         const result = await runClaudeAnalysis(m);
         setAiResults(prev => ({ ...prev, [m.id]: result }));
-      } catch {
-        setAiResults(prev => ({ ...prev, [m.id]: { error: "Couldn't reach the AI just now. Please try again." } }));
+      } catch (err) {
+        setAiResults(prev => ({ ...prev, [m.id]: { error: aiErrorText(err) } }));
       }
       setLoading(prev => ({ ...prev, [m.id]: false }));
     }

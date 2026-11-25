@@ -63,6 +63,32 @@ async function callClaude(messages, model, maxTokens, system) {
   );
 }
 
+// Turn an AI provider error into a sentence a gym owner can act on. The raw
+// provider message is kept at the end so nothing is hidden. Never includes the key.
+export function aiErrorMessage(status, body) {
+  const err = (body && body.error) || {};
+  const detail = typeof err.message === "string" ? err.message.slice(0, 200) : "";
+  const type = err.type || "";
+  const lower = detail.toLowerCase();
+  let reason;
+  if (status === 401 || type === "authentication_error") {
+    reason = "The AI key was rejected. Check ANTHROPIC_API_KEY in the Lambda settings.";
+  } else if (status === 403 || type === "permission_error") {
+    reason = "The AI key isn't allowed to use this model.";
+  } else if (lower.includes("credit balance")) {
+    reason = "The AI account is out of credit. Add credit at console.anthropic.com.";
+  } else if (status === 429 || type === "rate_limit_error") {
+    reason = "The AI is getting too many requests. Try again in a minute.";
+  } else if (status === 529 || type === "overloaded_error") {
+    reason = "The AI service is busy right now. Try again shortly.";
+  } else if (status >= 500) {
+    reason = "The AI service had a temporary problem. Try again shortly.";
+  } else {
+    reason = `The AI request failed (status ${status}).`;
+  }
+  return detail ? `${reason} (${detail})` : reason;
+}
+
 // ─── Send SMS via Twilio ──────────────────────────────────────────────────────
 async function sendSMS(toPhone, message) {
   const accountSid = process.env.TWILIO_ACCOUNT_SID;
@@ -792,7 +818,11 @@ async function captureInboundReply(phone, body, sid) {
       [{ role: "user", content: buildReplyUserMessage(member, turns) }],
       REPLY_MODEL, REPLY_MAX_TOKENS, buildReplySystemPrompt()
     ), INBOUND_DRAFT_TIMEOUT_MS);
-    if (response.statusCode >= 400) throw new Error(`AI status ${response.statusCode}`);
+    if (response.statusCode >= 400) {
+      let body = {};
+      try { body = JSON.parse(response.body); } catch { /* non-JSON */ }
+      throw new Error(aiErrorMessage(response.statusCode, body));
+    }
     const data = JSON.parse(response.body);
     const draft = parseDraftJson((data.content || []).filter(b => b.type === "text").map(b => b.text).join("").trim());
     const intel = (draft.departureReason !== "none" || draft.competitor)
@@ -876,7 +906,13 @@ export const handler = async (event) => {
         ANALYZE_MODEL,
         Math.min(Number(body.max_tokens) || 400, ANALYZE_MAX_TOKENS)
       );
-      const claudeData = JSON.parse(response.body);
+      let claudeData;
+      try { claudeData = JSON.parse(response.body); } catch { claudeData = {}; }
+      if (response.statusCode >= 400 || !Array.isArray(claudeData.content)) {
+        const error = aiErrorMessage(response.statusCode, claudeData);
+        console.warn("analyze: AI request failed:", response.statusCode, error);
+        return { statusCode: 502, headers: { ...CORS, "Content-Type": "application/json" }, body: JSON.stringify({ error }) };
+      }
 
       // Parse and save the AI result to DynamoDB — only for members with a
       // stable id, so sample-roster (1, 2, 3…) analyses never get stored.
@@ -1021,7 +1057,8 @@ export const handler = async (event) => {
       let claudeData;
       try { claudeData = JSON.parse(response.body); } catch { claudeData = {}; }
       if (response.statusCode >= 400 || !Array.isArray(claudeData.content)) {
-        const msg = claudeData.error?.message || "AI request failed";
+        const msg = aiErrorMessage(response.statusCode, claudeData);
+        console.warn("draft_reply: AI request failed:", response.statusCode, msg);
         return { statusCode: 502, headers: CORS, body: JSON.stringify({ error: msg, turns }) };
       }
       const raw = claudeData.content.filter(b => b.type === "text").map(b => b.text).join("").trim();
