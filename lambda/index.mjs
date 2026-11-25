@@ -272,10 +272,12 @@ export async function upsertMembers(tenantId, members) {
   return clean.length;
 }
 
-// Replace the whole roster: delete every member item this gym has (including
+// Replace the imported roster: delete this gym's member items (including
 // legacy analyses keyed 1, 2, 3…), then write the new list in import order.
+// Mindbody-synced members ("mb-" ids) are owned by the sync and kept.
 async function replaceRoster(tenantId, members) {
-  const existing = await scanAllByTenant(MEMBERS_TABLE, tenantId);
+  const existing = (await scanAllByTenant(MEMBERS_TABLE, tenantId))
+    .filter(i => !String(i.rawMemberId ?? "").startsWith("mb-"));
   await batchWriteAll(existing.map(i => ({ DeleteRequest: { Key: { memberId: i.memberId } } })));
   const now = new Date().toISOString();
   const base = Date.now() * 1000; // same ordering scale as upsertMembers
