@@ -8,6 +8,7 @@ import crypto from "crypto";
 import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
 import { DynamoDBDocumentClient, PutCommand, GetCommand, ScanCommand, UpdateCommand, BatchWriteCommand } from "@aws-sdk/lib-dynamodb";
 import { SESClient, SendEmailCommand } from "@aws-sdk/client-ses";
+import { DEFAULT_TZ, isValidTimeZone, isQuietHoursIn, computeDueAt, clampFollowUpDays, defaultFollowUpText, followupKey, settingsKey, processDueFollowups } from "./followups.mjs";
 
 // ─── DynamoDB setup ───────────────────────────────────────────────────────────
 const dynamo = DynamoDBDocumentClient.from(new DynamoDBClient({ region: "us-east-1" }));
@@ -640,10 +641,10 @@ export function keyword(text) {
 }
 
 // true = right now falls INSIDE quiet hours, so texting must be blocked.
-export function isQuietHours(now = new Date()) {
+// `tz` is the gym's own time zone (see getGymTimeZone); QUIET_TZ is the fallback.
+export function isQuietHours(now = new Date(), tz = QUIET_TZ) {
   if (!ENFORCE_QUIET_HOURS) return false;
-  const hour = Number(new Intl.DateTimeFormat("en-US", { hour: "2-digit", hourCycle: "h23", timeZone: QUIET_TZ }).format(now));
-  return !(hour >= QUIET_START && hour < QUIET_END);
+  return isQuietHoursIn(now, tz, QUIET_START, QUIET_END);
 }
 
 // Validate Twilio's X-Twilio-Signature so opt-out/opt-in webhooks can't be forged.
@@ -834,8 +835,138 @@ async function captureInboundReply(phone, body, sid) {
   }
 }
 
+// ═══ GYM SETTINGS + SCHEDULED FOLLOW-UPS ══════════════════════════════════════
+// Per-gym time zone (drives quiet hours and follow-up send time) is stored as a
+// `settings#<tenant>` item; each pending follow-up is one `followup#<tenant>#<member>`
+// item (scheduling again replaces it). Both live in the outreach table, so no new
+// table is needed. An hourly EventBridge rule invokes this Lambda to send due ones.
+const tzCache = new Map(); // tenantId → { tz, at } — short-lived, per warm container
+async function getGymTimeZone(tenantId) {
+  const hit = tzCache.get(tenantId);
+  if (hit && Date.now() - hit.at < 5 * 60 * 1000) return hit.tz;
+  let tz = QUIET_TZ;
+  try {
+    const r = await dynamo.send(new GetCommand({ TableName: OUTREACH_TABLE, Key: { logID: settingsKey(tenantId) } }));
+    if (r.Item && isValidTimeZone(r.Item.timezone)) tz = r.Item.timezone;
+  } catch (e) { console.warn("getGymTimeZone failed, using default:", e.message); }
+  if (!isValidTimeZone(tz)) tz = DEFAULT_TZ;
+  tzCache.set(tenantId, { tz, at: Date.now() });
+  return tz;
+}
+async function getGymSettings(tenantId) {
+  const r = await dynamo.send(new GetCommand({ TableName: OUTREACH_TABLE, Key: { logID: settingsKey(tenantId) } }));
+  return { timezone: r.Item?.timezone || null, effectiveTimezone: await getGymTimeZone(tenantId), quietStart: QUIET_START, quietEnd: QUIET_END };
+}
+async function saveGymTimeZone(tenantId, timezone) {
+  await dynamo.send(new UpdateCommand({
+    TableName: OUTREACH_TABLE,
+    Key: { logID: settingsKey(tenantId) },
+    UpdateExpression: "SET #t = :type, tenantId = :tid, timezone = :tz, updatedAt = :now",
+    ExpressionAttributeNames: { "#t": "type" },
+    ExpressionAttributeValues: { ":type": "settings", ":tid": tenantId, ":tz": timezone, ":now": new Date().toISOString() },
+  }));
+  tzCache.set(tenantId, { tz: timezone, at: Date.now() });
+}
+
+async function scheduleFollowup(tenantId, { memberId, memberName, member, phone, message, followUpDays }) {
+  const tz    = await getGymTimeZone(tenantId);
+  const now   = new Date();
+  const days  = clampFollowUpDays(followUpDays);
+  const item  = {
+    logID: followupKey(tenantId, memberId),
+    type: "followup", status: "scheduled", tenantId,
+    memberId: String(memberId), memberName: String(memberName || "").slice(0, 100), phone,
+    member: memberSnapshot({ ...(member || {}), name: memberName }), // so a reply to the follow-up files on this member
+    message: String(message || defaultFollowUpText(memberName)).slice(0, SMS_MAX_CHARS),
+    followUpDays: days, timezone: tz,
+    scheduledAt: now.toISOString(), dueAt: computeDueAt(now, days, tz).toISOString(), attempts: 0,
+  };
+  await dynamo.send(new PutCommand({ TableName: OUTREACH_TABLE, Item: item }));
+  return item;
+}
+async function cancelFollowup(tenantId, memberId) {
+  try {
+    await dynamo.send(new UpdateCommand({
+      TableName: OUTREACH_TABLE,
+      Key: { logID: followupKey(tenantId, memberId) },
+      UpdateExpression: "SET #s = :c, reason = :r, updatedAt = :now",
+      ConditionExpression: "#s = :sched",
+      ExpressionAttributeNames: { "#s": "status" },
+      ExpressionAttributeValues: { ":c": "cancelled", ":r": "owner", ":sched": "scheduled", ":now": new Date().toISOString() },
+    }));
+    return true;
+  } catch (e) {
+    if (e.name === "ConditionalCheckFailedException") return false; // none pending
+    throw e;
+  }
+}
+async function listFollowups(tenantId) {
+  const items = await scanAllByTenant(OUTREACH_TABLE, tenantId);
+  return items.filter(i => i.type === "followup")
+    .map(({ logID, tenantId: _t, ...rest }) => rest);
+}
+
+// Called by the hourly EventBridge rule (never reachable through the Function URL).
+async function runScheduledFollowups(now = new Date()) {
+  const due = [];
+  let ExclusiveStartKey;
+  do {
+    const res = await dynamo.send(new ScanCommand({
+      TableName: OUTREACH_TABLE,
+      FilterExpression: "#t = :f AND #s = :sched AND dueAt <= :now",
+      ExpressionAttributeNames: { "#t": "type", "#s": "status" },
+      ExpressionAttributeValues: { ":f": "followup", ":sched": "scheduled", ":now": now.toISOString() },
+      ExclusiveStartKey,
+    }));
+    due.push(...(res.Items || []));
+    ExclusiveStartKey = res.LastEvaluatedKey;
+  } while (ExclusiveStartKey);
+
+  const setFields = (fields) => {
+    const names = {}, values = {}, sets = [];
+    Object.entries(fields).forEach(([k, v], i) => { names[`#k${i}`] = k; values[`:v${i}`] = v; sets.push(`#k${i} = :v${i}`); });
+    return { names, values, sets };
+  };
+  const update = async (item, fields, condStatus) => {
+    const { names, values, sets } = setFields({ ...fields, updatedAt: new Date().toISOString() });
+    await dynamo.send(new UpdateCommand({
+      TableName: OUTREACH_TABLE, Key: { logID: item.logID },
+      UpdateExpression: "SET " + sets.join(", "),
+      ConditionExpression: "#cs = :cs",
+      ExpressionAttributeNames: { ...names, "#cs": "status" },
+      ExpressionAttributeValues: { ...values, ":cs": condStatus },
+    }));
+  };
+
+  const summary = await processDueFollowups(due, now, {
+    getTimeZone: getGymTimeZone,
+    isOptedOut,
+    getConversationTurns: (tenantId, memberId) => getConversation(tenantId, memberId),
+    claim: async (item) => {
+      try { await update(item, { status: "sending" }, "scheduled"); return true; }
+      catch (e) { if (e.name === "ConditionalCheckFailedException") return false; throw e; }
+    },
+    release: (item, fields) => update(item, { ...fields, status: "scheduled" }, "sending"),
+    cancel:  (item, reason) => update(item, { status: "cancelled", reason }, "scheduled").catch(e => { if (e.name !== "ConditionalCheckFailedException") throw e; }),
+    finish:  (item, status, fields) => update(item, { ...fields, status }, "sending"),
+    consumeQuota: (tenantId) => consumeQuota(tenantId, "sms", DAILY_SMS_LIMIT),
+    isFirstContact, sendSMS, markContacted, logSend,
+    rememberRecipient: (item, text) => rememberRecipient(item.phone, item.tenantId, item.memberId, item.member || { name: item.memberName }, text),
+    quietStart: QUIET_START, quietEnd: QUIET_END, enforceQuietHours: ENFORCE_QUIET_HOURS,
+    optOutFooter: OPTOUT_FOOTER, maxChars: SMS_MAX_CHARS,
+  });
+  console.log("scheduled follow-ups:", JSON.stringify(summary));
+  return summary;
+}
+
 // ─── Main handler ─────────────────────────────────────────────────────────────
 export const handler = async (event) => {
+  // ── Scheduled run (EventBridge) — sends due follow-ups. Function URL calls
+  // always carry requestContext, so this branch can't be triggered from the web.
+  if (!event.requestContext && (event.source === "aws.events" || event.pulseretainJob === "send_followups")) {
+    return runScheduledFollowups();
+  }
+
   // Read the HTTP method from either Function URL payload format:
   //   v2.0 → event.requestContext.http.method   ·   v1.0 → event.httpMethod
   const method = event.requestContext?.http?.method || event.httpMethod;
@@ -944,10 +1075,11 @@ export const handler = async (event) => {
         return { statusCode: 403, headers: { ...CORS, "Content-Type": "application/json" },
           body: JSON.stringify({ error: "This member has opted out of texts and can't be contacted.", code: "opted_out" }) };
       }
-      // 2) Respect quiet hours — no retention/marketing texts overnight.
-      if (isQuietHours()) {
+      // 2) Respect quiet hours in the gym's own time zone — no texts overnight.
+      const gymTz = await getGymTimeZone(tenantId);
+      if (isQuietHours(new Date(), gymTz)) {
         return { statusCode: 403, headers: { ...CORS, "Content-Type": "application/json" },
-          body: JSON.stringify({ error: `Outside allowed texting hours (${QUIET_START}:00–${QUIET_END}:00 ${QUIET_TZ}). Message not sent.`, code: "quiet_hours" }) };
+          body: JSON.stringify({ error: `Outside allowed texting hours (${QUIET_START}:00–${QUIET_END}:00 ${gymTz}). Message not sent.`, code: "quiet_hours" }) };
       }
       // 3) Daily texting budget per gym (checked last so blocked sends don't count).
       if (!(await consumeQuota(tenantId, "sms", DAILY_SMS_LIMIT))) return quotaExceeded("texting", DAILY_SMS_LIMIT);
@@ -1175,6 +1307,40 @@ export const handler = async (event) => {
     }
 
     // (submit_lead is handled earlier as a public route, before the auth gate.)
+
+    // ── Routes: gym settings (time zone for quiet hours + follow-up timing) ──
+    if (body.action === "get_settings") {
+      return { statusCode: 200, headers: { ...CORS, "Content-Type": "application/json" }, body: JSON.stringify(await getGymSettings(tenantId)) };
+    }
+    if (body.action === "save_settings") {
+      const tz = String(body.timezone || "");
+      if (!isValidTimeZone(tz)) return { statusCode: 400, headers: CORS, body: JSON.stringify({ error: "Unknown time zone" }) };
+      await saveGymTimeZone(tenantId, tz);
+      return { statusCode: 200, headers: { ...CORS, "Content-Type": "application/json" }, body: JSON.stringify({ success: true, timezone: tz }) };
+    }
+
+    // ── Routes: scheduled follow-ups (sent later by the hourly run) ─────────
+    if (body.action === "schedule_followup") {
+      const phone = toE164(body.phone);
+      if (!phone) return { statusCode: 400, headers: CORS, body: JSON.stringify({ error: "Missing a valid phone number" }) };
+      // Only saved roster members (stable ids) — never the built-in sample roster.
+      if (!isStableMemberId(body.memberId)) return { statusCode: 400, headers: CORS, body: JSON.stringify({ error: "Follow-ups can only be scheduled for members saved to your roster." }) };
+      if (body.message && String(body.message).length > SMS_MAX_CHARS) return { statusCode: 400, headers: CORS, body: JSON.stringify({ error: `Message too long (max ${SMS_MAX_CHARS} characters)` }) };
+      if (await isOptedOut(phone)) {
+        return { statusCode: 403, headers: { ...CORS, "Content-Type": "application/json" },
+          body: JSON.stringify({ error: "This member has opted out of texts and can't be contacted.", code: "opted_out" }) };
+      }
+      const { logID: _k, tenantId: _t, ...followup } = await scheduleFollowup(tenantId, { ...body, phone });
+      return { statusCode: 200, headers: { ...CORS, "Content-Type": "application/json" }, body: JSON.stringify({ success: true, followup }) };
+    }
+    if (body.action === "cancel_followup") {
+      if (!body.memberId) return { statusCode: 400, headers: CORS, body: JSON.stringify({ error: "Missing memberId" }) };
+      const cancelled = await cancelFollowup(tenantId, body.memberId);
+      return { statusCode: 200, headers: { ...CORS, "Content-Type": "application/json" }, body: JSON.stringify({ success: true, cancelled }) };
+    }
+    if (body.action === "list_followups") {
+      return { statusCode: 200, headers: { ...CORS, "Content-Type": "application/json" }, body: JSON.stringify({ followups: await listFollowups(tenantId) }) };
+    }
 
     // ── Route: "save_members" — persist the roster ────────────────────────────
     // mode "replace" (CSV import / sample gym): the list becomes the roster.
