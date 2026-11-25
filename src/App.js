@@ -349,12 +349,31 @@ const T = {
   faint:    "#9a9aae",
   line:     "#e7e7ee",
   soft:     "#f3f3f7",
-  page:     "#fafafb",
-  red:      "#e74c3c",   // brand red: money at risk, high risk
+  page:     "#f6f5fa",
+  red:      "#e74c3c",   // brand red: bad news (money at risk, high risk)
   redDark:  "#c0392b",
-  amber:    "#d4962a",
-  green:    "#1e7e45",
+  redTint:  "#fdeeec",
+  amber:    "#e0a800",   // yellow: in-between (risk score 35 to 75)
+  amberDark:"#9a7400",
+  amberTint:"#fdf7e1",
+  green:    "#1e7e45",   // green: good news (won back, low risk)
+  greenMid: "#27ae60",
+  greenTint:"#e9f7ef",
+  purple:   "#8e44ad",   // PulseRetain accents
+  purpleTint:"#f5eefa",
+  orange:   "#e67e22",
+  orangeTint:"#fdf1e5",
 };
+const ACCENT_GRADIENT = `linear-gradient(90deg, ${"#8e44ad"}, ${"#e67e22"})`;
+
+// AI risk score bands: above 75 is red, 35 to 75 is yellow, below 35 is green.
+function scoreTone(score) {
+  const n = Number(score) || 0;
+  if (n > 75) return { color: T.redDark, dot: T.red, bg: T.redTint, label: "High" };
+  if (n >= 35) return { color: T.amberDark, dot: T.amber, bg: T.amberTint, label: "Medium" };
+  return { color: T.green, dot: T.greenMid, bg: T.greenTint, label: "Low" };
+}
+const riskTone = { high: scoreTone(100), medium: scoreTone(50), low: scoreTone(0) };
 const SERIF = "Georgia, 'Times New Roman', serif";
 const SANS  = "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif";
 
@@ -362,6 +381,10 @@ function btn(variant = "secondary", extra = {}) {
   const base = { fontFamily: SANS, fontSize: 13, fontWeight: 600, borderRadius: 8, padding: "8px 14px", cursor: "pointer", whiteSpace: "nowrap", lineHeight: 1.2 };
   const v = {
     primary:   { background: T.ink, color: "#fff", border: `1px solid ${T.ink}` },
+    send:      { background: T.greenMid, color: "#fff", border: `1px solid ${T.greenMid}` },
+    log:       { background: T.purpleTint, color: "#6c3483", border: "1px solid #e2cdf0" },
+    draft:     { background: T.purple, color: "#fff", border: `1px solid ${T.purple}` },
+    remind:    { background: T.orangeTint, color: "#a85410", border: "1px solid #f6d3b0" },
     secondary: { background: "#fff", color: T.ink, border: `1px solid ${T.line}` },
     ghost:     { background: "transparent", color: T.muted, border: "1px solid transparent" },
   }[variant];
@@ -369,8 +392,9 @@ function btn(variant = "secondary", extra = {}) {
 }
 
 const eyebrow = { margin: 0, fontSize: 12, fontWeight: 500, color: T.muted, letterSpacing: 0.2 };
-const panel   = { background: "#fff", border: `1px solid ${T.line}`, borderRadius: 12 };
-const riskDot = { high: T.red, medium: T.amber, low: "#c9c9d4" };
+const panel   = { background: "#fff", border: `1px solid ${T.line}`, borderRadius: 12, overflow: "hidden" };
+// Panels get a thin purple or orange top edge (PulseRetain accent colors).
+const accentPanel = (color) => ({ ...panel, borderTop: `3px solid ${color}` });
 
 function Logo({ size = 26 }) {
   return (
@@ -383,11 +407,12 @@ function Logo({ size = 26 }) {
 }
 
 function RiskTag({ risk, score }) {
+  const tone = score !== undefined ? scoreTone(score) : (riskTone[risk] || riskTone.low);
   return (
-    <span style={{ display: "inline-flex", alignItems: "center", gap: 7, fontSize: 13, color: T.body, whiteSpace: "nowrap" }}>
-      <span style={{ width: 8, height: 8, borderRadius: "50%", background: riskDot[risk] || riskDot.low, flexShrink: 0 }} />
-      {riskConfig[risk]?.label || risk}
-      {score !== undefined && <span style={{ color: T.faint }}>{score}</span>}
+    <span style={{ justifySelf: "start", display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12, fontWeight: 600, color: tone.color, background: tone.bg, padding: "3px 10px", borderRadius: 20, whiteSpace: "nowrap" }}>
+      <span style={{ width: 7, height: 7, borderRadius: "50%", background: tone.dot, flexShrink: 0 }} />
+      {score !== undefined ? tone.label : (riskConfig[risk]?.label || risk)}
+      {score !== undefined && <span style={{ fontWeight: 700 }}>{score}</span>}
     </span>
   );
 }
@@ -400,19 +425,24 @@ function Bar({ pct, color = T.ink }) {
   );
 }
 
-function Stat({ label, value, sub, accent, isMobile }) {
+function Stat({ label, value, sub, accent, tone, isMobile }) {
+  const t = accent ? "bad" : tone;
+  const c = t === "bad" ? { edge: T.red, bg: T.redTint, text: T.redDark }
+          : t === "good" ? { edge: T.greenMid, bg: T.greenTint, text: T.green }
+          : t === "mid" ? { edge: T.amber, bg: T.amberTint, text: T.amberDark }
+          : { edge: T.purple, bg: "#fff", text: T.ink };
   return (
-    <div>
+    <div style={{ background: c.bg, border: `1px solid ${T.line}`, borderLeft: `3px solid ${c.edge}`, borderRadius: 10, padding: isMobile ? "10px 12px" : "12px 16px" }}>
       <p style={eyebrow}>{label}</p>
-      <p style={{ margin: "6px 0 0", fontFamily: SERIF, fontSize: isMobile ? 24 : 28, color: accent ? T.redDark : T.ink, lineHeight: 1.1 }}>{value}</p>
-      {sub && <p style={{ margin: "4px 0 0", fontSize: 12, color: T.faint }}>{sub}</p>}
+      <p style={{ margin: "4px 0 0", fontFamily: SERIF, fontSize: isMobile ? 22 : 26, color: c.text, lineHeight: 1.1 }}>{value}</p>
+      {sub && <p style={{ margin: "3px 0 0", fontSize: 12, color: T.muted }}>{sub}</p>}
     </div>
   );
 }
 
 function SectionHead({ title, sub, right, isMobile }) {
   return (
-    <div style={{ display: "flex", justifyContent: "space-between", alignItems: isMobile ? "flex-start" : "flex-end", flexDirection: isMobile ? "column" : "row", gap: 12, marginBottom: 16 }}>
+    <div style={{ display: "flex", justifyContent: "space-between", alignItems: isMobile ? "flex-start" : "flex-end", flexDirection: isMobile ? "column" : "row", gap: 12, marginBottom: 12 }}>
       <div>
         <h2 style={{ margin: 0, fontFamily: SERIF, fontSize: 20, fontWeight: 400, color: T.ink }}>{title}</h2>
         {sub && <p style={{ margin: "4px 0 0", fontSize: 13, color: T.muted }}>{sub}</p>}
@@ -920,7 +950,7 @@ export default function App() {
     if (!ai) return (
       <div style={{ ...wrap, display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap" }}>
         <p style={{ margin: 0, fontSize: 13, color: T.muted }}>No analysis yet for {firstOf(m)}.</p>
-        <button onClick={() => analyzeOne(m)} style={btn("primary")}>Analyze {firstOf(m)}</button>
+        <button onClick={() => analyzeOne(m)} style={btn("draft")}>Analyze {firstOf(m)}</button>
         <button onClick={() => setModalMember(m)} style={btn("ghost")}>Contact details</button>
       </div>
     );
@@ -946,12 +976,12 @@ export default function App() {
             <p style={{ margin: "6px 0 14px", fontSize: 14, color: T.body, lineHeight: 1.6, background: "#fff", border: `1px solid ${T.line}`, borderRadius: 10, padding: "12px 14px" }}>{ai.message}</p>
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
               {!smsSent.has(m.id) ? (
-                <button onClick={() => handleSendSMS(m, ai)} disabled={smsSending[m.id]} style={btn("primary", smsSending[m.id] ? { opacity: 0.5, cursor: "not-allowed" } : {})}>{smsSending[m.id] ? "Sending…" : "Send text"}</button>
+                <button onClick={() => handleSendSMS(m, ai)} disabled={smsSending[m.id]} style={btn("send", smsSending[m.id] ? { opacity: 0.5, cursor: "not-allowed" } : {})}>{smsSending[m.id] ? "Sending…" : "Send text"}</button>
               ) : (
-                <span style={{ fontSize: 13, color: T.green }}>Texted {m.phone}</span>
+                <span style={{ fontSize: 13, fontWeight: 600, color: T.green, background: T.greenTint, padding: "6px 12px", borderRadius: 8 }}>Texted {m.phone}</span>
               )}
-              {!logged && <button onClick={() => markOutreach(m, ai)} style={btn("secondary")}>Log as sent</button>}
-              {!scheduled && <button onClick={() => scheduleFollowUp(m, ai)} style={btn("secondary")}>Remind me in {ai.followUpDays || 3} days</button>}
+              {!logged && <button onClick={() => markOutreach(m, ai)} style={btn("log")}>Log as sent</button>}
+              {!scheduled && <button onClick={() => scheduleFollowUp(m, ai)} style={btn("remind")}>Remind me in {ai.followUpDays || 3} days</button>}
               <button onClick={() => setModalMember(m)} style={btn("ghost")}>Contact details</button>
             </div>
             {logged && <p style={{ margin: "10px 0 0", fontSize: 12, color: T.faint }}>Logged {logged.sentAt}</p>}
@@ -982,7 +1012,7 @@ export default function App() {
             rows={2}
             style={{ width: "100%", boxSizing: "border-box", border: `1px solid ${T.line}`, borderRadius: 10, padding: "10px 12px", fontSize: 14, fontFamily: SANS, resize: "vertical", outline: "none", background: "#fff", color: T.body }}
           />
-          <button onClick={() => draftReply(m, ai)} disabled={replyLoading[m.id]} style={btn("secondary", { marginTop: 8, ...(replyLoading[m.id] ? { opacity: 0.5, cursor: "not-allowed" } : {}) })}>
+          <button onClick={() => draftReply(m, ai)} disabled={replyLoading[m.id]} style={btn("draft", { marginTop: 8, ...(replyLoading[m.id] ? { opacity: 0.5, cursor: "not-allowed" } : {}) })}>
             {replyLoading[m.id] ? "Drafting…" : "Draft a reply"}
           </button>
 
@@ -997,8 +1027,8 @@ export default function App() {
               <p style={{ margin: 0, fontSize: 14, color: T.body, lineHeight: 1.6 }}>{d.reply}</p>
               {d.nextStep && <p style={{ margin: "10px 0 0", fontSize: 13, color: T.muted }}>Next step: {d.nextStep}</p>}
               <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 12 }}>
-                <button onClick={() => sendReplySMS(m)} disabled={replySending[m.id]} style={btn("primary", replySending[m.id] ? { opacity: 0.5, cursor: "not-allowed" } : {})}>{replySending[m.id] ? "Sending…" : "Send reply"}</button>
-                <button onClick={() => approveReplyNoSMS(m)} aria-label="Approve and log reply without sending SMS" style={btn("secondary")}>Log as sent</button>
+                <button onClick={() => sendReplySMS(m)} disabled={replySending[m.id]} style={btn("send", replySending[m.id] ? { opacity: 0.5, cursor: "not-allowed" } : {})}>{replySending[m.id] ? "Sending…" : "Send reply"}</button>
+                <button onClick={() => approveReplyNoSMS(m)} aria-label="Approve and log reply without sending SMS" style={btn("log")}>Log as sent</button>
                 <button onClick={() => copyReply(m)} aria-label="Copy drafted reply" style={btn("ghost")}>Copy</button>
                 <button onClick={() => draftReply(m, ai)} aria-label="Redraft reply" style={btn("ghost")}>Redraft</button>
               </div>
@@ -1057,6 +1087,7 @@ export default function App() {
                 ))}
               </nav>
             )}
+            <div style={{ height: 3, background: ACCENT_GRADIENT }} />
           </header>
 
           {/* ── Demo note (public no-login demo) ── */}
@@ -1074,7 +1105,7 @@ export default function App() {
             </div>
           )}
 
-          <main style={{ maxWidth: 1120, margin: "0 auto", padding: isMobile ? "24px 16px 48px" : "48px 32px 64px" }}>
+          <main style={{ maxWidth: 1120, margin: "0 auto", padding: isMobile ? "18px 16px 40px" : "28px 32px 48px" }}>
 
             {/* ════════════════════════════════════════════════════════════
                 TAB: TODAY  (revenue at risk → who to text → everyone else)
@@ -1082,7 +1113,7 @@ export default function App() {
             {activeTab === "Today" && (
               <>
                 {/* Page title + location picker */}
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap", marginBottom: isMobile ? 24 : 36 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap", marginBottom: isMobile ? 14 : 18 }}>
                   <p style={{ margin: 0, fontSize: 13, color: T.muted }}>
                     {todayLabel} · {usingImported ? "Your roster" : "Pulse Studio"} · {scopedMembers.length} members{filterLocation !== ALL_LOCATIONS ? ` at ${filterLocation}` : ""}
                     {usingImported && <button onClick={resetToDemo} style={{ marginLeft: 10, background: "none", border: "none", color: T.muted, fontSize: 13, cursor: "pointer", textDecoration: "underline", padding: 0 }}>Reset to demo</button>}
@@ -1097,10 +1128,10 @@ export default function App() {
                 </div>
 
                 {/* Headline: revenue at risk */}
-                <section style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1.4fr 1fr", gap: isMobile ? 28 : 48, alignItems: "end", marginBottom: isMobile ? 36 : 56 }}>
-                  <div>
+                <section style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1.25fr 1fr", gap: isMobile ? 14 : 20, alignItems: "stretch", marginBottom: isMobile ? 24 : 32 }}>
+                  <div style={{ background: "#fff", border: `1px solid ${T.line}`, borderLeft: `4px solid ${T.red}`, borderRadius: 12, padding: isMobile ? "18px 16px" : "22px 26px" }}>
                     <p style={{ ...eyebrow, fontSize: 14 }}>Revenue at risk</p>
-                    <p style={{ margin: "8px 0 0", fontFamily: SERIF, fontSize: isMobile ? 44 : 60, lineHeight: 1, color: insights.revenueAtRisk > 0 ? T.redDark : T.ink }}>
+                    <p style={{ margin: "8px 0 0", fontFamily: SERIF, fontSize: isMobile ? 44 : 56, lineHeight: 1, color: insights.revenueAtRisk > 0 ? T.redDark : T.ink }}>
                       ${insights.revenueAtRisk.toLocaleString()}<span style={{ fontSize: isMobile ? 18 : 22, color: T.muted }}> /month</span>
                     </p>
                     <p style={{ margin: "12px 0 0", fontSize: 15, color: T.body, lineHeight: 1.55, maxWidth: 520 }}>
@@ -1109,22 +1140,23 @@ export default function App() {
                         : "No members are at high risk right now."}
                     </p>
                   </div>
-                  <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 16, paddingTop: isMobile ? 20 : 0, borderTop: isMobile ? `1px solid ${T.line}` : "none" }}>
-                    <Stat isMobile={isMobile} label="Won back" value={statByLabel["Members Recovered"]} sub="members this month" />
-                    <Stat isMobile={isMobile} label="Revenue saved" value={statByLabel["Revenue Saved"]} sub="per year" />
-                    <Stat isMobile={isMobile} label="Reply rate" value={statByLabel["Avg Response Rate"]} sub={`${outreachLog.length} texts`} />
+                  <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr 1fr" : "1fr 1fr", gap: 12 }}>
+                    <Stat isMobile={isMobile} tone="good" label="Members won back" value={statByLabel["Members Recovered"]} sub="this month" />
+                    <Stat isMobile={isMobile} tone="good" label="Revenue saved" value={statByLabel["Revenue Saved"]} sub="per year" />
+                    <Stat isMobile={isMobile} tone="good" label="Reply rate" value={statByLabel["Avg Response Rate"]} sub={`${outreachLog.length} texts sent`} />
+                    <Stat isMobile={isMobile} accent label="Members at risk" value={insights.atRisk} sub="high risk right now" />
                   </div>
                 </section>
 
                 {/* Reach out today */}
-                <section style={{ marginBottom: isMobile ? 40 : 56 }}>
+                <section style={{ marginBottom: isMobile ? 28 : 32 }}>
                   <SectionHead isMobile={isMobile}
                     title="Reach out today"
                     sub={todaysQueue.length ? "Highest revenue at risk first. Review the text, then send it." : undefined}
                     right={todaysQueue.some(m => !aiResults[m.id]) && (
-                      <button onClick={prepTodaysQueue} disabled={analyzing} style={btn("secondary", analyzing ? { opacity: 0.5, cursor: "not-allowed" } : {})}>{analyzing ? "Drafting…" : "Draft all messages"}</button>
+                      <button onClick={prepTodaysQueue} disabled={analyzing} style={btn("draft", analyzing ? { opacity: 0.5, cursor: "not-allowed" } : {})}>{analyzing ? "Drafting…" : "Draft all messages"}</button>
                     )} />
-                  <div style={panel}>
+                  <div style={accentPanel(T.purple)}>
                     {todaysQueue.length === 0 ? (
                       <p style={{ margin: 0, padding: "32px 24px", fontSize: 14, color: T.muted, textAlign: "center" }}>You're all caught up. Nobody needs a message today.</p>
                     ) : todaysQueue.map((m, idx) => {
@@ -1132,7 +1164,7 @@ export default function App() {
                       const ready = ai && !ai.error;
                       const isLoading = loading[m.id];
                       return (
-                        <div key={m.id} style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "230px 1fr auto", gap: isMobile ? 14 : 32, padding: isMobile ? "18px 16px" : "24px 28px", borderTop: idx ? `1px solid ${T.line}` : "none", alignItems: "start" }}>
+                        <div key={m.id} style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "230px 1fr auto", gap: isMobile ? 14 : 32, padding: isMobile ? "14px 16px" : "16px 24px", borderTop: idx ? `1px solid ${T.line}` : "none", alignItems: "start" }}>
                           <div>
                             <p style={{ margin: 0, fontSize: 15, fontWeight: 600, color: T.ink }}>{m.name}</p>
                             <p style={{ margin: "4px 0 0", fontSize: 13, color: T.muted }}>Last visit {m.lastVisit.toLowerCase()}</p>
@@ -1146,7 +1178,7 @@ export default function App() {
                             ) : ready ? (
                               <>
                                 <p style={eyebrow}>Suggested text</p>
-                                <p style={{ margin: "6px 0 0", fontSize: 14, color: T.body, lineHeight: 1.6 }}>{ai.message}</p>
+                                <p style={{ margin: "6px 0 0", fontSize: 14, color: T.body, lineHeight: 1.55, background: T.page, borderLeft: `3px solid ${T.purple}`, borderRadius: 6, padding: "8px 12px" }}>{ai.message}</p>
                               </>
                             ) : (
                               <p style={{ margin: 0, fontSize: 14, color: T.faint }}>{ai && ai.error ? ai.error : "No message drafted yet."}</p>
@@ -1155,11 +1187,11 @@ export default function App() {
                           <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: isMobile ? "flex-start" : "flex-end" }}>
                             {ready ? (
                               <>
-                                {!smsSent.has(m.id) && <button onClick={() => handleSendSMS(m, ai)} disabled={smsSending[m.id]} style={btn("primary", smsSending[m.id] ? { opacity: 0.5, cursor: "not-allowed" } : {})}>{smsSending[m.id] ? "Sending…" : "Send text"}</button>}
-                                <button onClick={() => markOutreach(m, ai)} style={btn("secondary")}>Log as sent</button>
+                                {!smsSent.has(m.id) && <button onClick={() => handleSendSMS(m, ai)} disabled={smsSending[m.id]} style={btn("send", smsSending[m.id] ? { opacity: 0.5, cursor: "not-allowed" } : {})}>{smsSending[m.id] ? "Sending…" : "Send text"}</button>}
+                                <button onClick={() => markOutreach(m, ai)} style={btn("log")}>Log as sent</button>
                               </>
                             ) : (
-                              <button onClick={() => analyzeOne(m)} disabled={isLoading} style={btn("primary", isLoading ? { opacity: 0.5, cursor: "not-allowed" } : {})}>Draft message</button>
+                              <button onClick={() => analyzeOne(m)} disabled={isLoading} style={btn("draft", isLoading ? { opacity: 0.5, cursor: "not-allowed" } : {})}>Draft message</button>
                             )}
                             <button onClick={() => skipForToday(m)} aria-label={`Skip ${m.name} for today`} style={btn("ghost")}>Skip</button>
                           </div>
@@ -1176,19 +1208,19 @@ export default function App() {
                     sub={`${riskCounts.high} high risk · ${riskCounts.medium} medium · ${riskCounts.low} low`}
                     right={
                       <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                        <button onClick={analyzeAll} disabled={analyzing} style={btn("ghost", analyzing ? { opacity: 0.5, cursor: "not-allowed" } : {})}>{analyzing ? "Analyzing…" : "Analyze members"}</button>
+                        <button onClick={analyzeAll} disabled={analyzing} style={btn("log", analyzing ? { opacity: 0.5, cursor: "not-allowed" } : {})}>{analyzing ? "Analyzing…" : "Analyze members"}</button>
                         <button onClick={exportMembersCSV} aria-label="Export member list as CSV" style={btn("ghost")}>Export CSV</button>
                         <button onClick={() => setShowData(true)} aria-label="Add or import your gym's members" style={btn("secondary")}>Add members</button>
                       </div>
                     } />
 
-                  <div style={panel}>
+                  <div style={accentPanel(T.orange)}>
                     {/* Toolbar: risk filter + search */}
                     <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap", padding: isMobile ? "12px 16px" : "12px 24px", borderBottom: `1px solid ${T.line}` }}>
                       <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
                         {["all", "high", "medium", "low"].map(f => (
                           <button key={f} onClick={() => setFilterRisk(f)} aria-pressed={filterRisk === f} aria-label={`Filter members by ${f} risk`}
-                            style={{ background: filterRisk === f ? T.soft : "transparent", border: "none", borderRadius: 6, padding: "6px 10px", fontFamily: SANS, fontSize: 13, cursor: "pointer", color: filterRisk === f ? T.ink : T.muted, fontWeight: filterRisk === f ? 600 : 400 }}>
+                            style={{ background: filterRisk === f ? (f === "all" ? T.soft : riskTone[f].bg) : "transparent", border: "none", borderRadius: 6, padding: "6px 10px", fontFamily: SANS, fontSize: 13, cursor: "pointer", color: filterRisk === f ? (f === "all" ? T.ink : riskTone[f].color) : T.muted, fontWeight: filterRisk === f ? 600 : 400 }}>
                             {f === "all" ? "All" : riskConfig[f].label} <span style={{ color: T.faint, fontWeight: 400 }}>{riskCounts[f]}</span>
                           </button>
                         ))}
@@ -1198,7 +1230,7 @@ export default function App() {
                     </div>
 
                     {!isMobile && (
-                      <div style={{ display: "grid", gridTemplateColumns: "2fr 1.4fr 1fr 1.1fr 0.8fr 1fr 20px", gap: 12, padding: "10px 24px", borderBottom: `1px solid ${T.line}` }}>
+                      <div style={{ display: "grid", gridTemplateColumns: "2fr 1.4fr 1fr 1.1fr 0.8fr 1fr 20px", gap: 12, padding: "8px 24px", borderBottom: `1px solid ${T.line}`, background: T.page }}>
                         {["Member", "Plan", "Last visit", "Usual schedule", "Monthly", "Risk", ""].map((h, i) => (
                           <span key={i} style={{ fontSize: 12, color: T.faint }}>{h}</span>
                         ))}
@@ -1222,12 +1254,12 @@ export default function App() {
                             onKeyDown={e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setSelected(isSelected ? null : m.id); } }}
                             style={isMobile
                               ? { padding: "14px 16px", borderBottom: `1px solid ${T.line}`, cursor: "pointer", background: isSelected ? T.page : "#fff" }
-                              : { display: "grid", gridTemplateColumns: "2fr 1.4fr 1fr 1.1fr 0.8fr 1fr 20px", gap: 12, alignItems: "center", padding: "14px 24px", borderBottom: `1px solid ${T.line}`, cursor: "pointer", background: isSelected ? T.page : "#fff" }}>
+                              : { display: "grid", gridTemplateColumns: "2fr 1.4fr 1fr 1.1fr 0.8fr 1fr 20px", gap: 12, alignItems: "center", padding: "10px 24px", borderBottom: `1px solid ${T.line}`, cursor: "pointer", background: isSelected ? T.page : "#fff" }}>
                             {isMobile ? (
                               <>
                                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
                                   <span style={{ fontSize: 15, fontWeight: 600, color: T.ink }}>{m.name}</span>
-                                  <RiskTag risk={effRisk} />
+                                  <RiskTag risk={effRisk} score={score} />
                                 </div>
                                 <p style={{ margin: "4px 0 0", fontSize: 13, color: T.muted }}>{m.plan} · last visit {m.lastVisit.toLowerCase()} · ${m.value}/mo</p>
                                 {meta && <p style={{ margin: "2px 0 0", fontSize: 12, color: T.faint }}>{meta}</p>}
@@ -1236,7 +1268,7 @@ export default function App() {
                               <>
                                 <div>
                                   <span style={{ fontSize: 14, fontWeight: 600, color: T.ink }}>{m.name}</span>
-                                  {meta && <span style={{ display: "block", fontSize: 12, color: T.faint, marginTop: 2 }}>{meta}</span>}
+                                  {meta && <span style={{ display: "block", fontSize: 12, color: logged ? T.green : ai && !ai.error ? T.purple : T.faint, marginTop: 2 }}>{meta}</span>}
                                 </div>
                                 <span style={{ fontSize: 14 }}>{m.plan}</span>
                                 <span style={{ fontSize: 14, color: effRisk === "high" ? T.ink : T.body }}>{m.lastVisit}</span>
@@ -1261,7 +1293,7 @@ export default function App() {
             ════════════════════════════════════════════════════════════ */}
             {activeTab === "Outreach" && (
               <>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", flexWrap: "wrap", gap: 12, marginBottom: 32 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", flexWrap: "wrap", gap: 12, marginBottom: 20 }}>
                   <div>
                     <h1 style={{ margin: 0, fontFamily: SERIF, fontSize: isMobile ? 26 : 32, fontWeight: 400, color: T.ink }}>Outreach</h1>
                     <p style={{ margin: "6px 0 0", fontSize: 14, color: T.muted }}>Everyone you've contacted and how it went.</p>
@@ -1270,11 +1302,11 @@ export default function App() {
                 </div>
 
                 {outreachLog.length > 0 && (
-                  <div style={{ display: "grid", gridTemplateColumns: isMobile ? "repeat(2, 1fr)" : "repeat(4, 1fr)", gap: 20, marginBottom: 36 }}>
+                  <div style={{ display: "grid", gridTemplateColumns: isMobile ? "repeat(2, 1fr)" : "repeat(4, 1fr)", gap: 12, marginBottom: 24 }}>
                     <Stat isMobile={isMobile} label="Texts sent" value={outreachCounts.sent} />
-                    <Stat isMobile={isMobile} label="Replied" value={outreachCounts.responded} />
-                    <Stat isMobile={isMobile} label="Won back" value={outreachCounts.recovered} />
-                    <Stat isMobile={isMobile} label="Revenue saved" value={statByLabel["Revenue Saved"]} sub="per year" />
+                    <Stat isMobile={isMobile} tone="mid" label="Replied" value={outreachCounts.responded} />
+                    <Stat isMobile={isMobile} tone="good" label="Won back" value={outreachCounts.recovered} />
+                    <Stat isMobile={isMobile} tone="good" label="Revenue saved" value={statByLabel["Revenue Saved"]} sub="per year" />
                   </div>
                 )}
 
@@ -1284,25 +1316,25 @@ export default function App() {
                     <p style={{ fontSize: 14, color: T.muted, margin: 0 }}>Texts you send or log from the Today page will show up here.</p>
                   </div>
                 ) : (
-                  <div style={panel}>
+                  <div style={accentPanel(T.purple)}>
                     {!isMobile && (
-                      <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr 2.4fr 1.4fr", gap: 16, padding: "10px 24px", borderBottom: `1px solid ${T.line}` }}>
+                      <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr 2.4fr 1.4fr", gap: 16, padding: "8px 24px", borderBottom: `1px solid ${T.line}`, background: T.page }}>
                         {["Member", "Sent", "Message", "Outcome"].map(h => <span key={h} style={{ fontSize: 12, color: T.faint }}>{h}</span>)}
                       </div>
                     )}
                     {[...outreachLog].reverse().map(log => {
                       const statusMeta = {
-                        sent:        { label: "Waiting for reply", dot: "#c9c9d4" },
-                        responded:   { label: "Replied",           dot: T.amber },
-                        recovered:   { label: "Won back",          dot: T.green },
-                        no_response: { label: "No reply",          dot: "#c9c9d4" },
+                        sent:        { label: "Waiting for reply", dot: T.purple,   color: "#6c3483", bg: T.purpleTint },
+                        responded:   { label: "Replied",           dot: T.amber,    color: T.amberDark, bg: T.amberTint },
+                        recovered:   { label: "Won back",          dot: T.greenMid, color: T.green, bg: T.greenTint },
+                        no_response: { label: "No reply",          dot: T.red,      color: T.redDark, bg: T.redTint },
                       };
                       const sc = statusMeta[log.status] || statusMeta.sent;
-                      const link = { background: "none", border: "none", padding: 0, fontFamily: SANS, fontSize: 12, color: T.ink, textDecoration: "underline", cursor: "pointer" };
+                      const link = (v) => btn(v, { fontSize: 12, padding: "4px 10px", borderRadius: 6 });
                       return (
                         <div key={log.id} style={isMobile
                           ? { display: "flex", flexDirection: "column", gap: 6, padding: "16px", borderBottom: `1px solid ${T.line}` }
-                          : { display: "grid", gridTemplateColumns: "1.4fr 1fr 2.4fr 1.4fr", gap: 16, padding: "16px 24px", borderBottom: `1px solid ${T.line}`, alignItems: "start" }}>
+                          : { display: "grid", gridTemplateColumns: "1.4fr 1fr 2.4fr 1.4fr", gap: 16, padding: "12px 24px", borderBottom: `1px solid ${T.line}`, alignItems: "start" }}>
                           <div>
                             <span style={{ fontSize: 14, fontWeight: 600, color: T.ink, display: "block" }}>{log.memberName}</span>
                             <span style={{ fontSize: 12, color: T.faint }}>{log.plan} · ${log.value}/mo</span>
@@ -1310,19 +1342,19 @@ export default function App() {
                           <span style={{ fontSize: 13, color: T.muted }}>{shortDate(log.sentAt)}</span>
                           <span style={{ fontSize: 13, color: T.body, lineHeight: 1.55 }}>{log.message}</span>
                           <div>
-                            <span style={{ display: "inline-flex", alignItems: "center", gap: 7, fontSize: 13, color: T.ink }}>
-                              <span style={{ width: 8, height: 8, borderRadius: "50%", background: sc.dot }} />{sc.label}
+                            <span style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12, fontWeight: 600, color: sc.color, background: sc.bg, padding: "3px 10px", borderRadius: 20 }}>
+                              <span style={{ width: 7, height: 7, borderRadius: "50%", background: sc.dot }} />{sc.label}
                             </span>
-                            {log.status === "recovered" && <p style={{ margin: "3px 0 0", fontSize: 12, color: T.faint }}>${(Number(log.value || 0) * 12).toLocaleString()}/yr kept</p>}
+                            {log.status === "recovered" && <p style={{ margin: "4px 0 0", fontSize: 12, fontWeight: 600, color: T.green }}>${(Number(log.value || 0) * 12).toLocaleString()}/yr kept</p>}
                             {log.status === "sent" && (
-                              <div style={{ display: "flex", gap: 12, marginTop: 6, flexWrap: "wrap" }}>
-                                <button onClick={() => markStatus(log.id, "responded")} style={link}>Replied</button>
-                                <button onClick={() => markStatus(log.id, "recovered")} style={link}>Won back</button>
-                                <button onClick={() => markStatus(log.id, "no_response")} style={link}>No reply</button>
+                              <div style={{ display: "flex", gap: 6, marginTop: 8, flexWrap: "wrap" }}>
+                                <button onClick={() => markStatus(log.id, "responded")} style={link("remind")}>Replied</button>
+                                <button onClick={() => markStatus(log.id, "recovered")} style={link("send")}>Won back</button>
+                                <button onClick={() => markStatus(log.id, "no_response")} style={link("secondary")}>No reply</button>
                               </div>
                             )}
                             {log.status === "responded" && (
-                              <div style={{ marginTop: 6 }}><button onClick={() => markStatus(log.id, "recovered")} style={link}>Mark won back</button></div>
+                              <div style={{ marginTop: 6 }}><button onClick={() => markStatus(log.id, "recovered")} style={link("send")}>Mark won back</button></div>
                             )}
                           </div>
                         </div>
@@ -1343,40 +1375,40 @@ export default function App() {
               const maxMembers = Math.max(1, ...competitors.map(c => c.members));
               const total = scopedMembers.length || 1;
               const sevLabel = {
-                high:   { text: "Act now", color: T.redDark },
-                medium: { text: "Watch",   color: "#a8741a" },
-                info:   { text: "Insight", color: T.muted },
-                good:   { text: "Working", color: T.green },
+                high:   { text: "Act now", color: T.redDark,   bg: T.redTint },
+                medium: { text: "Watch",   color: T.amberDark, bg: T.amberTint },
+                info:   { text: "Insight", color: "#6c3483",   bg: T.purpleTint },
+                good:   { text: "Working", color: T.green,     bg: T.greenTint },
               };
-              const card = { ...panel, padding: isMobile ? "18px 16px" : "24px 28px" };
-              const h3 = { margin: "0 0 18px", fontFamily: SERIF, fontSize: 17, fontWeight: 400, color: T.ink };
+              const card = (c) => ({ ...accentPanel(c), padding: isMobile ? "14px 16px" : "18px 22px" });
+              const h3 = { margin: "0 0 14px", fontFamily: SERIF, fontSize: 17, fontWeight: 400, color: T.ink };
               const rowLabel = { display: "flex", justifyContent: "space-between", marginBottom: 6, fontSize: 13 };
               return (
                 <>
-                  <div style={{ marginBottom: 32 }}>
+                  <div style={{ marginBottom: 20 }}>
                     <h1 style={{ margin: 0, fontFamily: SERIF, fontSize: isMobile ? 26 : 32, fontWeight: 400, color: T.ink }}>Insights</h1>
                     <p style={{ margin: "6px 0 0", fontSize: 14, color: T.muted }}>Where your revenue is, why members leave, and what to change.</p>
                   </div>
 
-                  <div style={{ display: "grid", gridTemplateColumns: isMobile ? "repeat(2, 1fr)" : "repeat(4, 1fr)", gap: 20, marginBottom: 44 }}>
+                  <div style={{ display: "grid", gridTemplateColumns: isMobile ? "repeat(2, 1fr)" : "repeat(4, 1fr)", gap: 12, marginBottom: 28 }}>
                     <Stat isMobile={isMobile} label="Revenue at risk" value={`$${insights.revenueAtRisk.toLocaleString()}/mo`} sub={`$${insights.projectedAnnual.toLocaleString()} a year`} accent={insights.revenueAtRisk > 0} />
                     <Stat isMobile={isMobile} label="Monthly revenue" value={`$${analyticsData.totalRevenue.toLocaleString()}`} sub={`${scopedMembers.length} members`} />
-                    <Stat isMobile={isMobile} label="Average risk score" value={`${analyticsData.avgRisk}`} sub="out of 100" />
-                    <Stat isMobile={isMobile} label="Won back" value={outreachCounts.recovered} sub={`${statByLabel["Revenue Saved"]} a year`} />
+                    <Stat isMobile={isMobile} tone={analyticsData.avgRisk > 75 ? "bad" : analyticsData.avgRisk >= 35 ? "mid" : "good"} label="Average risk score" value={`${analyticsData.avgRisk}`} sub="out of 100" />
+                    <Stat isMobile={isMobile} tone="good" label="Won back" value={outreachCounts.recovered} sub={`${statByLabel["Revenue Saved"]} a year`} />
                   </div>
 
                   {/* What to change (strategist) */}
-                  <section style={{ marginBottom: 44 }}>
+                  <section style={{ marginBottom: 28 }}>
                     <SectionHead isMobile={isMobile} title="What to change" sub="Patterns across your roster, most urgent first." />
                     {insights.findings.length === 0 ? (
                       <div style={{ ...panel, padding: "36px 24px", textAlign: "center", fontSize: 14, color: T.muted }}>Nothing stands out yet. Add your members or analyze them to see patterns here.</div>
                     ) : (
-                      <div style={panel}>
+                      <div style={accentPanel(T.purple)}>
                         {insights.findings.map((f, i) => {
                           const sv = sevLabel[f.severity] || sevLabel.info;
                           return (
-                            <div key={f.id} style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "90px 1fr", gap: isMobile ? 4 : 20, padding: isMobile ? "16px" : "20px 28px", borderTop: i ? `1px solid ${T.line}` : "none" }}>
-                              <span style={{ fontSize: 12, fontWeight: 600, color: sv.color, paddingTop: 3 }}>{sv.text}</span>
+                            <div key={f.id} style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "90px 1fr", gap: isMobile ? 4 : 20, padding: isMobile ? "14px 16px" : "14px 22px", borderTop: i ? `1px solid ${T.line}` : "none", alignItems: "start" }}>
+                              <span style={{ justifySelf: "start", fontSize: 12, fontWeight: 600, color: sv.color, background: sv.bg, padding: "3px 10px", borderRadius: 20 }}>{sv.text}</span>
                               <div>
                                 <p style={{ margin: 0, fontSize: 15, fontWeight: 600, color: T.ink }}>{f.title}</p>
                                 <p style={{ margin: "4px 0 0", fontSize: 14, color: T.body, lineHeight: 1.6 }}>{f.detail}</p>
@@ -1390,30 +1422,30 @@ export default function App() {
                   </section>
 
                   {/* Revenue and risk breakdown */}
-                  <section style={{ marginBottom: 44 }}>
+                  <section style={{ marginBottom: 28 }}>
                     <SectionHead isMobile={isMobile} title="Members and revenue" />
-                    <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: 20 }}>
-                      <div style={card}>
+                    <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: 16 }}>
+                      <div style={card(T.purple)}>
                         <h3 style={h3}>Members by risk</h3>
                         {["high", "medium", "low"].map(r => {
                           const count = analyticsData.riskCounts[r];
                           const pct = Math.round((count / total) * 100);
                           return (
                             <div key={r} style={{ marginBottom: 16 }}>
-                              <div style={rowLabel}><span>{riskConfig[r].label} risk</span><span style={{ color: T.muted }}>{count} · {pct}%</span></div>
-                              <Bar pct={pct} color={r === "high" ? T.red : r === "medium" ? T.amber : "#c9c9d4"} />
+                              <div style={rowLabel}><span>{riskConfig[r].label} risk</span><span style={{ color: riskTone[r].color, fontWeight: 600 }}>{count} · {pct}%</span></div>
+                              <Bar pct={pct} color={riskTone[r].dot} />
                             </div>
                           );
                         })}
                       </div>
-                      <div style={card}>
+                      <div style={card(T.orange)}>
                         <h3 style={h3}>Revenue by plan</h3>
                         {Object.entries(analyticsData.planRevenue).sort((a, b) => b[1] - a[1]).map(([plan, rev]) => {
                           const pct = analyticsData.totalRevenue ? Math.round((rev / analyticsData.totalRevenue) * 100) : 0;
                           return (
                             <div key={plan} style={{ marginBottom: 16 }}>
                               <div style={rowLabel}><span>{plan}</span><span style={{ color: T.muted }}>${rev.toLocaleString()}/mo · {pct}%</span></div>
-                              <Bar pct={pct} />
+                              <Bar pct={pct} color={T.purple} />
                             </div>
                           );
                         })}
@@ -1421,16 +1453,16 @@ export default function App() {
                     </div>
 
                     {locationSummary.length > 1 && (
-                      <div style={{ ...panel, marginTop: 20, overflowX: "auto" }}>
-                        <div style={{ display: "grid", gridTemplateColumns: "1.6fr 1fr 1fr 1fr", gap: 12, padding: "10px 24px", borderBottom: `1px solid ${T.line}`, minWidth: 420 }}>
+                      <div style={{ ...accentPanel(T.purple), marginTop: 16, overflowX: "auto" }}>
+                        <div style={{ display: "grid", gridTemplateColumns: "1.6fr 1fr 1fr 1fr", gap: 12, padding: "8px 24px", borderBottom: `1px solid ${T.line}`, minWidth: 420, background: T.page }}>
                           {["Location", "Members", "High risk", "Revenue"].map(h => <span key={h} style={{ fontSize: 12, color: T.faint }}>{h}</span>)}
                         </div>
                         {locationSummary.map(loc => (
                           <button key={loc.location} onClick={() => { setFilterLocation(loc.location); setActiveTab("Today"); }}
-                            style={{ display: "grid", gridTemplateColumns: "1.6fr 1fr 1fr 1fr", gap: 12, width: "100%", minWidth: 420, textAlign: "left", background: "#fff", border: "none", borderBottom: `1px solid ${T.line}`, padding: "13px 24px", fontFamily: SANS, fontSize: 14, color: T.body, cursor: "pointer" }}>
+                            style={{ display: "grid", gridTemplateColumns: "1.6fr 1fr 1fr 1fr", gap: 12, width: "100%", minWidth: 420, textAlign: "left", background: "#fff", border: "none", borderBottom: `1px solid ${T.line}`, padding: "10px 24px", fontFamily: SANS, fontSize: 14, color: T.body, cursor: "pointer" }}>
                             <span style={{ color: T.ink, fontWeight: 600 }}>{loc.location}</span>
                             <span>{loc.total}</span>
-                            <span style={{ color: loc.high > 0 ? T.redDark : T.body }}>{loc.high}</span>
+                            <span style={{ color: loc.high > 0 ? T.redDark : T.green, fontWeight: 600 }}>{loc.high}</span>
                             <span>${loc.revenue.toLocaleString()}/mo</span>
                           </button>
                         ))}
@@ -1439,13 +1471,13 @@ export default function App() {
                   </section>
 
                   {/* Outreach results */}
-                  <section style={{ marginBottom: 44 }}>
+                  <section style={{ marginBottom: 28 }}>
                     <SectionHead isMobile={isMobile} title="Outreach results" />
-                    <div style={{ ...card, display: "grid", gridTemplateColumns: isMobile ? "repeat(2, 1fr)" : "repeat(4, 1fr)", gap: 20 }}>
+                    <div style={{ ...card(T.orange), display: "grid", gridTemplateColumns: isMobile ? "repeat(2, 1fr)" : "repeat(4, 1fr)", gap: 20 }}>
                       <Stat isMobile={isMobile} label="Texts sent" value={outreachCounts.sent} />
-                      <Stat isMobile={isMobile} label="Replied" value={outreachCounts.responded} />
-                      <Stat isMobile={isMobile} label="Won back" value={outreachCounts.recovered} />
-                      <Stat isMobile={isMobile} label="No reply" value={outreachCounts.noReply} />
+                      <Stat isMobile={isMobile} tone="mid" label="Replied" value={outreachCounts.responded} />
+                      <Stat isMobile={isMobile} tone="good" label="Won back" value={outreachCounts.recovered} />
+                      <Stat isMobile={isMobile} tone="bad" label="No reply" value={outreachCounts.noReply} />
                     </div>
                   </section>
 
@@ -1457,21 +1489,21 @@ export default function App() {
                     ) : !intel || intel.total === 0 ? (
                       <div style={{ ...panel, padding: "36px 24px", textAlign: "center", fontSize: 14, color: T.muted }}>When a member replies and says why they're leaving or where they're going, it shows up here.</div>
                     ) : (
-                      <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: 20 }}>
-                        <div style={card}>
+                      <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: 16 }}>
+                        <div style={card(T.purple)}>
                           <h3 style={h3}>Reasons given</h3>
                           {Object.entries(reasons).filter(([, n]) => n > 0).sort((a, b) => b[1] - a[1]).map(([key, n]) => {
                             const pct = Math.round((n / reasonsTotal) * 100);
                             return (
                               <div key={key} style={{ marginBottom: 16 }}>
                                 <div style={rowLabel}><span>{reasonMeta[key]?.label || key}</span><span style={{ color: T.muted }}>{n} · {pct}%</span></div>
-                                <Bar pct={pct} />
+                                <Bar pct={pct} color={T.orange} />
                               </div>
                             );
                           })}
                           <p style={{ margin: "4px 0 0", fontSize: 12, color: T.faint }}>{intel.total} member{intel.total !== 1 ? "s" : ""} shared a reason</p>
                         </div>
-                        <div style={card}>
+                        <div style={card(T.orange)}>
                           <h3 style={h3}>Gyms they named</h3>
                           {competitors.length === 0 ? (
                             <p style={{ margin: 0, fontSize: 14, color: T.muted }}>No other gym named yet.</p>
@@ -1489,7 +1521,7 @@ export default function App() {
               );
             })()}
 
-            <p style={{ textAlign: "center", marginTop: 56, fontSize: 12, color: T.faint }}>PulseRetain{IS_DEMO || !usingImported ? " · Sample roster" : ""}</p>
+            <p style={{ textAlign: "center", marginTop: 32, fontSize: 12, color: T.faint }}>PulseRetain{IS_DEMO || !usingImported ? " · Sample roster" : ""}</p>
           </main>
 
           {/* ── Add / Import Members Modal ── */}
