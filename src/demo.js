@@ -158,7 +158,7 @@ function draftFor(member, text) {
       suggestedOffer: "class_credit", nextStep: "Suggest a class time that fits their schedule.", escalate: false, departureReason: "time", competitor: null };
   }
   if (/\b(yes|yeah|sure|sounds good|see you|thanks|thank you|ok|okay|will do|i'll be there)\b/.test(t)) {
-    return { sentiment: "positive", reply: `Amazing, ${name}! Can't wait to see you. I'll save your spot. 💪`,
+    return { sentiment: "positive", reply: `Amazing, ${name}! Can't wait to see you. I'll save your spot.`,
       suggestedOffer: "none", nextStep: "Book their class and mark them as responded.", escalate: false, departureReason: "none", competitor: null };
   }
   return { sentiment: "neutral", reply: `Thanks for getting back to us, ${name}! Anything we can do to make it easier to come in? Happy to help however we can.`,
