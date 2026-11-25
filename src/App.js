@@ -6,9 +6,9 @@ import { awsConfig } from "./aws-config";
 import { buildStats, deriveRisk, isDemoPhone, pickTodaysQueue } from "./retention";
 import { parseMembersCSV, SAMPLE_CSV_HEADERS, SAMPLE_CSV_ROWS, SAMPLE_GYM_CSV } from "./importMembers";
 import { computeInsights } from "./strategist";
-import { IS_DEMO, exitDemoToSignUp, demoAnalyze, demoDraftReply, demoGetConversation, demoLogReplySent, demoCompetitiveIntel, demoInitialAiResults, demoInitialOutreach } from "./demo";
+import { IS_DEMO, exitDemoToSignUp, demoAnalyze, demoDraftReply, demoGetConversation, demoLogReplySent, demoCompetitiveIntel, demoInitialAiResults, demoInitialOutreach, demoInbox, demoMarkReplyHandled } from "./demo";
 import { listLocations, filterByLocation, summarizeLocations, ALL_LOCATIONS } from "./locations";
-import { useState, useMemo, useEffect, useRef } from "react";
+import { useState, useMemo, useEffect, useRef, useCallback } from "react";
 
 Amplify.configure(awsConfig);
 
@@ -155,7 +155,9 @@ Current risk score: ${member.score}/100`
 // ─── Send real SMS via Lambda → Twilio ───────────────────────────────────────
 // Sample members have fictional 555 numbers that no carrier can deliver to, so
 // those sends are simulated (and labelled as such) instead of failing.
-async function sendRealSMS(toPhone, message) {
+// Passing the member lets the server file their text replies on the right
+// thread (Twilio only tells us the sender's phone number).
+async function sendRealSMS(toPhone, message, member) {
   if (IS_DEMO) { await new Promise(r => setTimeout(r, 700)); return { success: true, simulated: true }; } // demo never texts anyone
   if (isDemoPhone(toPhone)) {
     await new Promise(r => setTimeout(r, 700));
@@ -165,6 +167,10 @@ async function sendRealSMS(toPhone, message) {
       action: "send_sms",
       to: toPhone,
       message,
+      ...(member ? {
+        memberId: member.id,
+        member: { name: member.name, plan: member.plan, value: member.value, joinedMonths: member.joinedMonths, usualVisits: member.usualVisits, lastVisit: member.lastVisit },
+      } : {}),
   });
   if (!response.ok) throw await serverError(response);
   const data = await response.json();
@@ -240,6 +246,22 @@ async function logReplySent(member, text) {
   if (!res.ok) return null;
   const data = await res.json().catch(() => null);
   return data && Array.isArray(data.turns) ? data.turns : null;
+}
+
+// Member text replies captured by the Twilio webhook, each with Claude's
+// pre-drafted answer. Returns null on an older Lambda (section stays hidden).
+async function fetchInbox() {
+  if (IS_DEMO) return demoInbox();
+  const res = await apiFetch({ action: "get_inbox" });
+  if (!res.ok) return null;
+  const data = await res.json().catch(() => null);
+  return data && Array.isArray(data.threads) ? data.threads : null;
+}
+
+async function markReplyHandled(memberId) {
+  if (IS_DEMO) return demoMarkReplyHandled(memberId);
+  const res = await apiFetch({ action: "mark_reply_handled", memberId });
+  if (!res.ok) throw await serverError(res);
 }
 
 // Competitive Intelligence — aggregates where/why members say they're leaving
@@ -391,6 +413,9 @@ export default function App() {
   const [replyLoading, setReplyLoading] = useState({});
   const [replySending, setReplySending] = useState({});
   const [convs, setConvs]               = useState({});   // conversation threads, keyed by member id
+  const [inbox, setInbox]               = useState(null); // texted replies awaiting the owner (null = not loaded / unsupported)
+  const [inboxEdits, setInboxEdits]     = useState({});   // owner's edits to a drafted answer, keyed by member id
+  const [inboxBusy, setInboxBusy]       = useState({});   // in-flight action per member id
   const { authStatus } = useAuthenticator((c) => [c.authStatus]);
 
   // ── Load persisted data from DynamoDB once the user is signed in ──────────
@@ -454,6 +479,25 @@ export default function App() {
     });
     return () => { cancelled = true; };
   }, [selected, convs]);
+
+  // ── Texted replies inbox: load after sign-in, refresh every minute while the
+  //    Outreach tab is open so new replies show up without a reload ─────────
+  const refreshInbox = useCallback(async () => {
+    try {
+      const threads = await fetchInbox();
+      if (threads) setInbox(threads);
+    } catch (err) { console.error("Failed to load replies:", err); }
+  }, []);
+  useEffect(() => {
+    if (!IS_DEMO && authStatus !== "authenticated") return;
+    refreshInbox();
+  }, [authStatus, refreshInbox]);
+  useEffect(() => {
+    if (activeTab !== "Outreach") return;
+    refreshInbox();
+    const t = setInterval(refreshInbox, 60000);
+    return () => clearInterval(t);
+  }, [activeTab, refreshInbox]);
 
   // ── Close the member modal with the Escape key (accessibility) ────────────
   useEffect(() => {
@@ -623,7 +667,7 @@ export default function App() {
     }
     setSmsSending(prev => ({ ...prev, [member.id]: true }));
     try {
-      const res = await sendRealSMS(member.phone, ai.message);
+      const res = await sendRealSMS(member.phone, ai.message, member);
       setSmsSent(prev => new Set([...prev, member.id]));
       await markOutreach(member, ai, true); // finish logging first so its toast doesn't replace this one
       showToast(res.simulated
@@ -671,7 +715,7 @@ export default function App() {
     if (!member.phone) { showToast("❌ No phone number on file for " + member.name.split(" ")[0]); return; }
     setReplySending(prev => ({ ...prev, [member.id]: true }));
     try {
-      const res = await sendRealSMS(member.phone, draft.reply);
+      const res = await sendRealSMS(member.phone, draft.reply, member);
       await recordReplyOnThread(member, draft.reply);
       showToast(res.simulated
         ? `📱 Reply to ${member.name.split(" ")[0]} logged (${IS_DEMO ? "demo" : "sample member"} — no real text sent)`
@@ -695,6 +739,59 @@ export default function App() {
     if (navigator.clipboard) navigator.clipboard.writeText(draft.reply);
     showToast("📋 Reply copied");
   }
+
+  // ── Texted replies inbox actions ──────────────────────────────────────────
+  // The roster member if we still have them loaded, else the profile the
+  // server saved when the gym texted them.
+  function inboxMember(th) {
+    const m = members.find(x => String(x.id) === String(th.memberId));
+    return m || { ...(th.member || {}), id: th.memberId, name: th.memberName || th.member?.name || "Member", phone: th.phone };
+  }
+  function inboxText(th) {
+    return inboxEdits[th.memberId] ?? th.draft?.reply ?? "";
+  }
+  async function inboxAction(th, fn) {
+    setInboxBusy(prev => ({ ...prev, [th.memberId]: true }));
+    try { await fn(); } catch (err) { showToast(`❌ ${err.message}`); }
+    setInboxBusy(prev => ({ ...prev, [th.memberId]: false }));
+  }
+  function afterInboxReply(th, member, turns) {
+    if (turns) setConvs(prev => ({ ...prev, [member.id]: turns }));
+    setInboxEdits(prev => { const n = { ...prev }; delete n[th.memberId]; return n; });
+    return refreshInbox();
+  }
+  const sendInboxReply = (th) => inboxAction(th, async () => {
+    const text = inboxText(th).trim();
+    if (!text) { showToast("Write a reply first"); return; }
+    const member = inboxMember(th);
+    const phone = th.phone || member.phone;
+    if (!phone) { showToast("❌ No phone number for " + member.name.split(" ")[0]); return; }
+    const res = await sendRealSMS(phone, text, member);
+    await afterInboxReply(th, member, await logReplySent(member, text));
+    showToast(res.simulated
+      ? `📱 Reply to ${member.name.split(" ")[0]} logged (${IS_DEMO ? "demo" : "sample member"} — no real text sent)`
+      : `📱 Reply sent to ${member.name.split(" ")[0]}!`);
+  });
+  const logInboxReply = (th) => inboxAction(th, async () => {
+    const text = inboxText(th).trim();
+    if (!text) { showToast("Write a reply first"); return; }
+    const member = inboxMember(th);
+    await afterInboxReply(th, member, await logReplySent(member, text));
+    showToast(`✓ Reply logged for ${member.name.split(" ")[0]} (not texted)`);
+  });
+  const redraftInboxReply = (th) => inboxAction(th, async () => {
+    const member = inboxMember(th);
+    const lastMember = [...th.turns].reverse().find(t => t.role === "member");
+    if (!lastMember) return;
+    const agent = await draftReplyAgent(member, lastMember.text, null);
+    if (!agent) throw new Error("Drafting isn't available on this server yet");
+    setInbox(prev => (prev || []).map(x => x.memberId === th.memberId ? { ...x, draft: { ...agent.draft, forAt: lastMember.at } } : x));
+    setInboxEdits(prev => { const n = { ...prev }; delete n[th.memberId]; return n; });
+  });
+  const handledInboxReply = (th) => inboxAction(th, async () => {
+    await markReplyHandled(th.memberId);
+    await refreshInbox();
+  });
 
   // ── AI calls ───────────────────────────────────────────────────────────────
   const analyzeAll = async () => {
@@ -848,7 +945,11 @@ export default function App() {
                     fontSize: 13, fontWeight: activeTab === tab ? 700 : 400,
                     transition: "all 0.15s", whiteSpace: "nowrap", flexShrink: 0,
                   }}
-                >{tab}</button>
+                >{tab}{tab === "Outreach" && inbox && inbox.some(t => t.needsReply) && (
+                  <span aria-label={`${inbox.filter(t => t.needsReply).length} replies waiting`} style={{ marginLeft: 6, background: "#e74c3c", color: "#fff", borderRadius: 10, padding: "1px 6px", fontSize: 10, fontWeight: 700 }}>
+                    {inbox.filter(t => t.needsReply).length}
+                  </span>
+                )}</button>
               ))}
             </div>
 
@@ -1359,6 +1460,79 @@ export default function App() {
                     <button onClick={exportOutreachCSV} aria-label="Export outreach log as CSV" style={{ background: "#fff", color: "#1a1a2e", border: "1px solid #ddd", borderRadius: 10, padding: "10px 16px", fontSize: 13, fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap" }}>⬇ Export CSV</button>
                   )}
                 </div>
+
+                {/* ── Member replies: texts captured automatically, with Claude's draft ── */}
+                {inbox && inbox.length > 0 && (() => {
+                  const waiting = inbox.filter(t => t.needsReply);
+                  const done = inbox.filter(t => !t.needsReply).slice(0, 5);
+                  const sentimentColors = { positive: "#1e7e45", neutral: "#555", hesitant: "#b7770d", leaving: "#c0392b" };
+                  const fmt = (iso) => { try { return new Date(iso).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }); } catch { return ""; } };
+                  return (
+                    <div style={{ marginBottom: 24 }}>
+                      <h2 style={{ margin: "0 0 4px", fontSize: 17, fontWeight: 700, color: "#1a1a2e" }}>💬 Member replies {waiting.length > 0 && <span style={{ color: "#e74c3c" }}>· {waiting.length} waiting</span>}</h2>
+                      <p style={{ margin: "0 0 12px", color: "#888", fontSize: 13 }}>Texts members send back are saved here automatically, with a reply Claude drafted for you. Nothing is sent until you approve it.</p>
+                      {waiting.length === 0 && (
+                        <div style={{ background: "#fff", borderRadius: 14, boxShadow: "0 1px 4px rgba(0,0,0,0.07)", padding: "16px 20px", fontSize: 13, color: "#888", marginBottom: 12 }}>All caught up. No replies waiting.</div>
+                      )}
+                      {waiting.map(th => {
+                        const busy = !!inboxBusy[th.memberId];
+                        const draft = th.draft;
+                        const recent = th.turns.slice(-4);
+                        return (
+                          <div key={th.memberId} style={{ background: "#fff", borderRadius: 14, boxShadow: "0 1px 4px rgba(0,0,0,0.07)", padding: isMobile ? 14 : "16px 20px", marginBottom: 12, borderLeft: `4px solid ${draft?.escalate ? "#e74c3c" : "#185fa5"}` }}>
+                            <div style={{ display: "flex", justifyContent: "space-between", gap: 8, flexWrap: "wrap", marginBottom: 10 }}>
+                              <span style={{ fontSize: 14, fontWeight: 700, color: "#1a1a2e" }}>{th.memberName || "Member"}</span>
+                              <span style={{ fontSize: 11, color: "#aaa" }}>replied {fmt(th.lastMemberAt)}</span>
+                            </div>
+                            <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 12 }}>
+                              {recent.map((t, i) => (
+                                <div key={i} style={{ alignSelf: t.role === "member" ? "flex-start" : "flex-end", maxWidth: "85%", background: t.role === "member" ? "#f1f1f4" : "#e8f4fd", color: "#1a1a2e", borderRadius: 12, padding: "7px 11px", fontSize: 13, lineHeight: 1.45 }}>
+                                  {t.text}
+                                </div>
+                              ))}
+                            </div>
+                            {draft?.escalate && (
+                              <div role="alert" style={{ background: "#fdecea", color: "#a93226", borderRadius: 8, padding: "8px 10px", fontSize: 12, fontWeight: 600, marginBottom: 8 }}>⚠️ You should handle this one personally. {draft.nextStep}</div>
+                            )}
+                            {draft ? (
+                              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 6, fontSize: 11 }}>
+                                <span style={{ fontWeight: 700, color: "#185fa5" }}>✨ Claude's draft</span>
+                                <span style={{ color: sentimentColors[draft.sentiment] || "#555", fontWeight: 600 }}>{draft.sentiment}</span>
+                                {offerLabels[draft.suggestedOffer] && <span style={{ background: "#f0faf4", color: "#1e7e45", borderRadius: 10, padding: "1px 8px", fontWeight: 600 }}>{offerLabels[draft.suggestedOffer]}</span>}
+                                {!draft.escalate && draft.nextStep && <span style={{ color: "#888" }}>Next: {draft.nextStep}</span>}
+                              </div>
+                            ) : (
+                              <div style={{ fontSize: 11, color: "#888", marginBottom: 6 }}>No draft yet. Press “Draft with Claude”, or write your own reply.</div>
+                            )}
+                            <textarea
+                              aria-label={`Reply to ${th.memberName}`}
+                              value={inboxText(th)}
+                              onChange={e => setInboxEdits(prev => ({ ...prev, [th.memberId]: e.target.value }))}
+                              rows={3} maxLength={480}
+                              style={{ width: "100%", boxSizing: "border-box", border: "1px solid #ddd", borderRadius: 8, padding: "8px 10px", fontSize: 13, fontFamily: "inherit", resize: "vertical", marginBottom: 8 }}
+                            />
+                            <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                              <button disabled={busy} onClick={() => sendInboxReply(th)} style={{ background: "linear-gradient(135deg,#185fa5,#0c447c)", color: "#fff", border: "none", borderRadius: 8, padding: "8px 14px", fontSize: 12, fontWeight: 700, cursor: busy ? "wait" : "pointer", opacity: busy ? 0.6 : 1 }}>📱 Approve & Send</button>
+                              <button disabled={busy} onClick={() => logInboxReply(th)} title="Record the reply without texting (e.g. you replied from your phone)" style={{ background: "#e8f4fd", color: "#185fa5", border: "1px solid #b3d9f5", borderRadius: 8, padding: "8px 12px", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>✓ Log only</button>
+                              <button disabled={busy} onClick={() => redraftInboxReply(th)} style={{ background: "#fff", color: "#1a1a2e", border: "1px solid #ddd", borderRadius: 8, padding: "8px 12px", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>{draft ? "↻ Redraft" : "✨ Draft with Claude"}</button>
+                              <button disabled={busy} onClick={() => handledInboxReply(th)} style={{ background: "#f9f9f9", color: "#888", border: "1px solid #ddd", borderRadius: 8, padding: "8px 12px", fontSize: 12, cursor: "pointer" }}>Mark handled</button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                      {done.length > 0 && (
+                        <details style={{ fontSize: 12, color: "#888" }}>
+                          <summary style={{ cursor: "pointer" }}>Recently answered ({done.length})</summary>
+                          {done.map(th => (
+                            <div key={th.memberId} style={{ padding: "6px 0", borderBottom: "1px solid #f0f0f0" }}>
+                              <strong style={{ color: "#1a1a2e" }}>{th.memberName}</strong>: “{(th.turns.filter(t => t.role === "member").pop()?.text || "").slice(0, 80)}”
+                            </div>
+                          ))}
+                        </details>
+                      )}
+                    </div>
+                  );
+                })()}
 
                 {outreachLog.length === 0 ? (
                   <div style={{ background: "#fff", borderRadius: 14, boxShadow: "0 1px 4px rgba(0,0,0,0.07)", padding: "48px 24px", textAlign: "center" }}>

@@ -34,3 +34,20 @@ test("STOP is respected with no offer", async () => {
   expect(res.draft.suggestedOffer).toBe("none");
   expect(res.draft.escalate).toBe(true);
 });
+
+test("the replies inbox shows a texted reply with a draft until it's handled", async () => {
+  const { demoInbox, demoMarkReplyHandled } = await import("./demo");
+  let threads = await demoInbox();
+  const ryan = threads.find((t) => t.memberId === "8");
+  expect(ryan.needsReply).toBe(true);
+  expect(ryan.draft.suggestedOffer).toBe("pause_membership");
+  expect(ryan.draft.competitor).toBe("Planet Fitness");
+  // Re-drafting the same member text must not duplicate it in the thread.
+  const before = demoGetConversation(8).length;
+  await demoDraftReply({ id: 8, name: "Ryan Foster" }, ryan.turns[ryan.turns.length - 1].text);
+  expect(demoGetConversation(8).length).toBe(before);
+  await new Promise((r) => setTimeout(r, 5));
+  demoMarkReplyHandled("8");
+  threads = await demoInbox();
+  expect(threads.find((t) => t.memberId === "8").needsReply).toBe(false);
+});

@@ -170,7 +170,12 @@ export async function demoDraftReply(member, memberMessage, originalOutreach) {
   const turns = convs[member.id] ? [...convs[member.id]] : [];
   const now = new Date().toISOString();
   if (turns.length === 0 && originalOutreach) turns.push({ role: "studio", text: String(originalOutreach), at: now });
-  turns.push({ role: "member", text: String(memberMessage), at: now });
+  // Same retry guard as the live agent: re-drafting the latest member text
+  // (e.g. from the replies inbox) doesn't add it to the thread twice.
+  const last = turns[turns.length - 1];
+  if (!(last && last.role === "member" && last.text === String(memberMessage))) {
+    turns.push({ role: "member", text: String(memberMessage), at: now });
+  }
   const draft = draftFor(member, String(memberMessage));
   if (draft.departureReason !== "none" || draft.competitor) {
     intelByMember[member.id] = { departureReason: draft.departureReason, competitor: draft.competitor,
@@ -208,4 +213,46 @@ export function demoCompetitiveIntel() {
   }
   const competitors = Object.values(compMap).sort((a, b) => b.members - a.members || b.monthlyValue - a.monthlyValue);
   return { total: all.length, reasons, competitors, lostToCompetitorsRevenue };
+}
+
+// ── Texted replies inbox (Outreach tab) ──────────────────────────────────────
+// Live, member texts arrive through the Twilio webhook and are pre-drafted on
+// the server. The demo seeds one so visitors see what an owner would wake up to.
+const handledAt = {}; // memberId → ISO time the owner marked it handled
+let inboxSeeded = false;
+function seedDemoInbox() {
+  if (inboxSeeded) return;
+  inboxSeeded = true;
+  const hoursAgo = (h) => new Date(Date.now() - h * 3600e3).toISOString();
+  convs[8] = [
+    { role: "studio", text: PRESET[8].message, at: hoursAgo(20) },
+    { role: "member", text: "Thanks. Honestly money's tight and Planet Fitness is like $15 a month", at: hoursAgo(2), via: "sms", from: "+17045550562" },
+  ];
+}
+
+const DEMO_PROFILES = { 8: { name: "Ryan Foster", plan: "10-Class Pack", value: 49, joinedMonths: 9, usualVisits: "Weekends", lastVisit: "8 days ago" } };
+
+export async function demoInbox() {
+  seedDemoInbox();
+  await wait(300);
+  return Object.entries(convs)
+    .map(([memberId, turns]) => {
+      const sms = turns.filter((t) => t.role === "member" && t.via === "sms");
+      if (sms.length === 0) return null;
+      const lastMember = [...turns].reverse().find((t) => t.role === "member");
+      const last = turns[turns.length - 1];
+      const member = DEMO_PROFILES[memberId] || { name: "Member" };
+      return {
+        memberId, memberName: member.name, phone: sms[sms.length - 1].from, member,
+        needsReply: last.role === "member" && !(handledAt[memberId] >= lastMember.at),
+        lastMemberAt: lastMember.at, turns: turns.slice(-12),
+        draft: last.role === "member" ? { ...draftFor(member, lastMember.text), forAt: lastMember.at } : null,
+      };
+    })
+    .filter(Boolean)
+    .sort((a, b) => String(b.lastMemberAt).localeCompare(String(a.lastMemberAt)));
+}
+
+export function demoMarkReplyHandled(memberId) {
+  handledAt[memberId] = new Date().toISOString();
 }
