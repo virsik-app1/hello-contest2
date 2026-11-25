@@ -687,7 +687,121 @@ async function handleTwilioInbound(event) {
   if (from && OPTOUT_WORDS.has(kw)) { await setOptOut(from,   { source: "inbound_sms" }); return twiml(""); } // Twilio's default reply confirms
   if (from && OPTIN_WORDS.has(kw))  { await clearOptOut(from, { source: "inbound_sms" }); return twiml("You're re-subscribed. Reply STOP to opt out anytime."); }
   if (HELP_WORDS.has(kw))           { return twiml(HELP_REPLY); }
-  return twiml(""); // ordinary replies: acknowledge 200 (owner-side capture is a later feature)
+  // Ordinary replies: save to the member's thread and pre-draft an answer for
+  // the owner to approve in the Outreach tab. Nothing is ever auto-sent back.
+  if (from) await captureInboundReply(from, params.Body, params.MessageSid);
+  return twiml("");
+}
+
+// ═══ INBOUND REPLY CAPTURE ════════════════════════════════════════════════════
+// Twilio only tells us the sender's phone. Every successful send_sms records
+// which gym + member that phone belongs to ("route#<phone>"), so a reply can be
+// filed on the right member's thread. With one shared Twilio number, the gym
+// that texted the number most recently owns the reply. (Per-gym numbers later
+// make this exact.)
+const routeKey = (phone) => `route#${phone}`;
+const INBOUND_DRAFT_TIMEOUT_MS = Number(process.env.INBOUND_DRAFT_TIMEOUT_MS) || 8000; // Twilio gives up at 15s
+
+// Only the profile fields the reply agent reads (see buildReplyUserMessage).
+export function memberSnapshot(m = {}) {
+  return {
+    name: clean(m.name, 80), plan: clean(m.plan, 60), value: Number(m.value) || 0,
+    joinedMonths: clean(m.joinedMonths, 12), usualVisits: clean(m.usualVisits, 60), lastVisit: clean(m.lastVisit, 40),
+  };
+}
+
+async function rememberRecipient(phone, tenantId, memberId, member, text) {
+  if (!memberId) return; // older frontend: no member attached, nothing to route to
+  try {
+    await dynamo.send(new PutCommand({ TableName: OUTREACH_TABLE, Item: {
+      logID: routeKey(phone), type: "route", phone, tenantId, memberId: String(memberId),
+      member: memberSnapshot(member), lastText: String(text).slice(0, 500), at: new Date().toISOString(),
+    } }));
+  } catch (e) { console.warn("rememberRecipient failed:", e.message); }
+}
+
+// Pure: add an inbound SMS to a thread. Seeds the thread with the gym's last
+// text so the agent knows what the member is answering, and ignores Twilio
+// retries of the same MessageSid. Returns null when nothing changed.
+export function appendInboundTurn(turns, { text, sid, from, at, seedText }) {
+  const t = Array.isArray(turns) ? [...turns] : [];
+  if (sid && t.some(x => x.sid === sid)) return null;
+  if (t.length === 0 && seedText) t.push({ role: "studio", text: String(seedText).slice(0, 500), at });
+  t.push({ role: "member", text, at, via: "sms", from, ...(sid ? { sid } : {}) });
+  return t;
+}
+
+// Pure: summarize one conversation item for the owner's reply inbox.
+export function inboxEntry(item) {
+  const turns = Array.isArray(item.turns) ? item.turns : [];
+  const smsTurns = turns.filter(t => t.role === "member" && t.via === "sms");
+  if (smsTurns.length === 0) return null; // only threads with a real texted reply
+  const lastMember = [...turns].reverse().find(t => t.role === "member");
+  const last = turns[turns.length - 1];
+  const handled = item.handledAt && lastMember && item.handledAt >= lastMember.at;
+  const draft = item.pendingDraft && lastMember && item.pendingDraft.forAt === lastMember.at ? item.pendingDraft : null;
+  return {
+    memberId: String(item.memberId), memberName: item.memberName || "",
+    phone: smsTurns[smsTurns.length - 1].from || null,
+    member: item.member || null,
+    needsReply: !!(last && last.role === "member" && !handled),
+    lastMemberAt: lastMember?.at || null,
+    turns: turns.slice(-12),
+    draft,
+  };
+}
+
+function withTimeout(promise, ms) {
+  let timer;
+  return Promise.race([promise, new Promise((_, rej) => { timer = setTimeout(() => rej(new Error("timeout")), ms); })])
+    .finally(() => clearTimeout(timer));
+}
+
+async function captureInboundReply(phone, body, sid) {
+  const text = String(body ?? "").trim().slice(0, 1000);
+  if (!text) return;
+  const at = new Date().toISOString();
+  let route = null;
+  try {
+    route = (await dynamo.send(new GetCommand({ TableName: OUTREACH_TABLE, Key: { logID: routeKey(phone) } }))).Item || null;
+  } catch (e) { console.warn("route lookup failed:", e.message); }
+  if (!route) {
+    // No gym has texted this number through PulseRetain — keep it for audit
+    // rather than silently dropping it.
+    await dynamo.send(new PutCommand({ TableName: OUTREACH_TABLE, Item: {
+      logID: `inbound#${phone}#${at}`, type: "inbound_unmatched", phone, text, sid: sid || null, at } }));
+    console.warn("inbound reply from unknown number — stored as inbound_unmatched");
+    return;
+  }
+  const { tenantId, memberId } = route;
+  const member = { ...memberSnapshot(route.member), name: route.member?.name || "Member" };
+  const convItem = await loadConversationItem(tenantId, memberId);
+  const turns = appendInboundTurn(convItem?.turns, { text, sid, from: phone, at, seedText: route.lastText });
+  if (!turns) return; // Twilio retry of a message we already saved
+  const meta = { intel: convItem?.intel || null, memberValue: member.value, member };
+  // Save first — the member's words are kept even if drafting fails below.
+  await saveConversation(tenantId, memberId, member.name, turns, meta);
+
+  // Draft the gym's answer now so it's waiting when the owner opens the app.
+  // Best-effort: on quota, timeout or a bad model response the owner can still
+  // press "Draft reply" in the Outreach tab.
+  try {
+    if (!process.env.ANTHROPIC_API_KEY) return;
+    if (!(await consumeQuota(tenantId, "ai", DAILY_AI_LIMIT))) return;
+    const response = await withTimeout(callClaude(
+      [{ role: "user", content: buildReplyUserMessage(member, turns) }],
+      REPLY_MODEL, REPLY_MAX_TOKENS, buildReplySystemPrompt()
+    ), INBOUND_DRAFT_TIMEOUT_MS);
+    if (response.statusCode >= 400) throw new Error(`AI status ${response.statusCode}`);
+    const data = JSON.parse(response.body);
+    const draft = parseDraftJson((data.content || []).filter(b => b.type === "text").map(b => b.text).join("").trim());
+    const intel = (draft.departureReason !== "none" || draft.competitor)
+      ? { departureReason: draft.departureReason, competitor: draft.competitor || null, at }
+      : meta.intel;
+    await saveConversation(tenantId, memberId, member.name, turns, { ...meta, intel, pendingDraft: { ...draft, forAt: at } });
+  } catch (e) {
+    console.warn("inbound auto-draft skipped:", e.message);
+  }
 }
 
 // ─── Main handler ─────────────────────────────────────────────────────────────
@@ -809,6 +923,7 @@ export const handler = async (event) => {
 
       const result = await sendSMS(phone, outText);
       await markContacted(phone);
+      await rememberRecipient(phone, tenantId, body.memberId, body.member, outText); // so replies find this member
       await logSend(tenantId, phone, outText, { sid: result.sid, firstContact: first });
       return {
         statusCode: 200,
@@ -985,14 +1100,41 @@ export const handler = async (event) => {
       if (!memberId || !text) {
         return { statusCode: 400, headers: CORS, body: JSON.stringify({ error: "Missing memberId or text" }) };
       }
-      const turns = await getConversation(tenantId, memberId);
+      const ci = await loadConversationItem(tenantId, memberId);
+      const turns = (ci && Array.isArray(ci.turns)) ? ci.turns : [];
       turns.push({ role: "studio", text: String(text).slice(0, 500), at: new Date().toISOString() });
-      await saveConversation(tenantId, memberId, memberName, turns);
+      // Keep the thread's intel/profile (a bare save used to wipe them).
+      await saveConversation(tenantId, memberId, memberName, turns,
+        { intel: ci?.intel || null, memberValue: ci?.memberValue || 0, ...(ci?.member ? { member: ci.member } : {}) });
       return {
         statusCode: 200,
         headers: { ...CORS, "Content-Type": "application/json" },
         body: JSON.stringify({ success: true, turns }),
       };
+    }
+
+    // ── Route: "get_inbox" — texted member replies, newest first ────────────
+    if (body.action === "get_inbox") {
+      const items = await scanAllByTenant(OUTREACH_TABLE, tenantId);
+      const threads = items
+        .filter(i => i.type === "conversation")
+        .map(inboxEntry)
+        .filter(Boolean)
+        .sort((a, b) => String(b.lastMemberAt).localeCompare(String(a.lastMemberAt)));
+      return {
+        statusCode: 200,
+        headers: { ...CORS, "Content-Type": "application/json" },
+        body: JSON.stringify({ threads }),
+      };
+    }
+
+    // ── Route: "mark_reply_handled" — owner dealt with it outside the app ───
+    if (body.action === "mark_reply_handled") {
+      if (!body.memberId) return { statusCode: 400, headers: CORS, body: JSON.stringify({ error: "Missing memberId" }) };
+      const ci = await loadConversationItem(tenantId, body.memberId);
+      if (!ci) return { statusCode: 404, headers: CORS, body: JSON.stringify({ error: "Conversation not found" }) };
+      await dynamo.send(new PutCommand({ TableName: OUTREACH_TABLE, Item: { ...ci, handledAt: new Date().toISOString() } }));
+      return { statusCode: 200, headers: { ...CORS, "Content-Type": "application/json" }, body: JSON.stringify({ success: true }) };
     }
 
     // (submit_lead is handled earlier as a public route, before the auth gate.)

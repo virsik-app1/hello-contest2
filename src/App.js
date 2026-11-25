@@ -7,9 +7,9 @@ import { buildStats, deriveRisk, isDemoPhone, pickTodaysQueue } from "./retentio
 import { parseMembersCSV, SAMPLE_CSV_HEADERS, SAMPLE_CSV_ROWS, SAMPLE_GYM_CSV } from "./importMembers";
 import { isStableId, newMemberId, withStableIds, normalizeMemberId, restoreResults } from "./memberStore";
 import { computeInsights } from "./strategist";
-import { IS_DEMO, exitDemoToSignUp, demoAnalyze, demoDraftReply, demoGetConversation, demoLogReplySent, demoCompetitiveIntel, demoInitialAiResults, demoInitialOutreach } from "./demo";
+import { IS_DEMO, exitDemoToSignUp, demoAnalyze, demoDraftReply, demoGetConversation, demoLogReplySent, demoCompetitiveIntel, demoInitialAiResults, demoInitialOutreach, demoInbox, demoMarkReplyHandled } from "./demo";
 import { listLocations, filterByLocation, summarizeLocations, ALL_LOCATIONS } from "./locations";
-import { useState, useMemo, useEffect, useRef } from "react";
+import { useState, useMemo, useEffect, useRef, useCallback } from "react";
 
 Amplify.configure(awsConfig);
 
@@ -158,7 +158,9 @@ Current risk score: ${member.score}/100`
 // ─── Send real SMS via Lambda → Twilio ───────────────────────────────────────
 // Sample members have fictional 555 numbers that no carrier can deliver to, so
 // those sends are simulated (and labelled as such) instead of failing.
-async function sendRealSMS(toPhone, message) {
+// Passing the member lets the server file their text replies on the right
+// thread (Twilio only tells us the sender's phone number).
+async function sendRealSMS(toPhone, message, member) {
   if (IS_DEMO) { await new Promise(r => setTimeout(r, 700)); return { success: true, simulated: true }; } // demo never texts anyone
   if (isDemoPhone(toPhone)) {
     await new Promise(r => setTimeout(r, 700));
@@ -168,6 +170,10 @@ async function sendRealSMS(toPhone, message) {
       action: "send_sms",
       to: toPhone,
       message,
+      ...(member ? {
+        memberId: member.id,
+        member: { name: member.name, plan: member.plan, value: member.value, joinedMonths: member.joinedMonths, usualVisits: member.usualVisits, lastVisit: member.lastVisit },
+      } : {}),
   });
   if (!response.ok) throw await serverError(response);
   const data = await response.json();
@@ -263,6 +269,22 @@ async function logReplySent(member, text) {
   if (!res.ok) return null;
   const data = await res.json().catch(() => null);
   return data && Array.isArray(data.turns) ? data.turns : null;
+}
+
+// Member text replies captured by the Twilio webhook, each with Claude's
+// pre-drafted answer. Returns null on an older Lambda (section stays hidden).
+async function fetchInbox() {
+  if (IS_DEMO) return demoInbox();
+  const res = await apiFetch({ action: "get_inbox" });
+  if (!res.ok) return null;
+  const data = await res.json().catch(() => null);
+  return data && Array.isArray(data.threads) ? data.threads : null;
+}
+
+async function markReplyHandled(memberId) {
+  if (IS_DEMO) return demoMarkReplyHandled(memberId);
+  const res = await apiFetch({ action: "mark_reply_handled", memberId });
+  if (!res.ok) throw await serverError(res);
 }
 
 // Competitive Intelligence — aggregates where/why members say they're leaving
@@ -525,6 +547,10 @@ export default function App() {
   const [replyLoading, setReplyLoading] = useState({});
   const [replySending, setReplySending] = useState({});
   const [convs, setConvs]               = useState({});   // conversation threads, keyed by member id
+  const [inbox, setInbox]               = useState(null); // texted replies awaiting the owner (null = not loaded / unsupported)
+  const [inboxEdits, setInboxEdits]     = useState({});   // owner's edits to a drafted answer, keyed by member id
+  const [inboxBusy, setInboxBusy]       = useState({});   // in-flight action per member id
+  const waitingReplies = (inbox || []).filter(t => t.needsReply).length;
   const { authStatus } = useAuthenticator((c) => [c.authStatus]);
 
   // ── Load persisted data from DynamoDB once the user is signed in ──────────
@@ -588,6 +614,25 @@ export default function App() {
     });
     return () => { cancelled = true; };
   }, [selected, convs]);
+
+  // ── Texted replies inbox: load after sign-in, refresh every minute while the
+  //    Outreach tab is open so new replies show up without a reload ─────────
+  const refreshInbox = useCallback(async () => {
+    try {
+      const threads = await fetchInbox();
+      if (threads) setInbox(threads);
+    } catch (err) { console.error("Failed to load replies:", err); }
+  }, []);
+  useEffect(() => {
+    if (!IS_DEMO && authStatus !== "authenticated") return;
+    refreshInbox();
+  }, [authStatus, refreshInbox]);
+  useEffect(() => {
+    if (activeTab !== "Outreach") return;
+    refreshInbox();
+    const t = setInterval(refreshInbox, 60000);
+    return () => clearInterval(t);
+  }, [activeTab, refreshInbox]);
 
   // ── Close the member modal with the Escape key (accessibility) ────────────
   useEffect(() => {
@@ -772,7 +817,7 @@ export default function App() {
     }
     setSmsSending(prev => ({ ...prev, [member.id]: true }));
     try {
-      const res = await sendRealSMS(member.phone, ai.message);
+      const res = await sendRealSMS(member.phone, ai.message, member);
       setSmsSent(prev => new Set([...prev, member.id]));
       await markOutreach(member, ai, true); // finish logging first so its toast doesn't replace this one
       showToast(res.simulated
@@ -820,7 +865,7 @@ export default function App() {
     if (!member.phone) { showToast("No phone number on file for " + member.name.split(" ")[0]); return; }
     setReplySending(prev => ({ ...prev, [member.id]: true }));
     try {
-      const res = await sendRealSMS(member.phone, draft.reply);
+      const res = await sendRealSMS(member.phone, draft.reply, member);
       await recordReplyOnThread(member, draft.reply);
       showToast(res.simulated
         ? `Reply to ${member.name.split(" ")[0]} logged (${IS_DEMO ? "demo" : "sample member"}, no real text sent)`
@@ -844,6 +889,59 @@ export default function App() {
     if (navigator.clipboard) navigator.clipboard.writeText(draft.reply);
     showToast("Reply copied");
   }
+
+  // ── Texted replies inbox actions ──────────────────────────────────────────
+  // The roster member if we still have them loaded, else the profile the
+  // server saved when the gym texted them.
+  function inboxMember(th) {
+    const m = members.find(x => String(x.id) === String(th.memberId));
+    return m || { ...(th.member || {}), id: th.memberId, name: th.memberName || th.member?.name || "Member", phone: th.phone };
+  }
+  function inboxText(th) {
+    return inboxEdits[th.memberId] ?? th.draft?.reply ?? "";
+  }
+  async function inboxAction(th, fn) {
+    setInboxBusy(prev => ({ ...prev, [th.memberId]: true }));
+    try { await fn(); } catch (err) { showToast(err.message); }
+    setInboxBusy(prev => ({ ...prev, [th.memberId]: false }));
+  }
+  function afterInboxReply(th, member, turns) {
+    if (turns) setConvs(prev => ({ ...prev, [member.id]: turns }));
+    setInboxEdits(prev => { const n = { ...prev }; delete n[th.memberId]; return n; });
+    return refreshInbox();
+  }
+  const sendInboxReply = (th) => inboxAction(th, async () => {
+    const text = inboxText(th).trim();
+    if (!text) { showToast("Write a reply first"); return; }
+    const member = inboxMember(th);
+    const phone = th.phone || member.phone;
+    if (!phone) { showToast("No phone number on file for " + member.name.split(" ")[0]); return; }
+    const res = await sendRealSMS(phone, text, member);
+    await afterInboxReply(th, member, await logReplySent(member, text));
+    showToast(res.simulated
+      ? `Reply to ${member.name.split(" ")[0]} logged (${IS_DEMO ? "demo" : "sample member"}, no real text sent)`
+      : `Reply sent to ${member.name.split(" ")[0]}`);
+  });
+  const logInboxReply = (th) => inboxAction(th, async () => {
+    const text = inboxText(th).trim();
+    if (!text) { showToast("Write a reply first"); return; }
+    const member = inboxMember(th);
+    await afterInboxReply(th, member, await logReplySent(member, text));
+    showToast(`Reply logged for ${member.name.split(" ")[0]} (not texted)`);
+  });
+  const redraftInboxReply = (th) => inboxAction(th, async () => {
+    const member = inboxMember(th);
+    const lastMember = [...th.turns].reverse().find(t => t.role === "member");
+    if (!lastMember) return;
+    const agent = await draftReplyAgent(member, lastMember.text, null);
+    if (!agent) throw new Error("Drafting isn't available on this server yet");
+    setInbox(prev => (prev || []).map(x => x.memberId === th.memberId ? { ...x, draft: { ...agent.draft, forAt: lastMember.at } } : x));
+    setInboxEdits(prev => { const n = { ...prev }; delete n[th.memberId]; return n; });
+  });
+  const handledInboxReply = (th) => inboxAction(th, async () => {
+    await markReplyHandled(th.memberId);
+    await refreshInbox();
+  });
 
   // ── AI calls ───────────────────────────────────────────────────────────────
   const analyzeAll = async () => {
@@ -1029,7 +1127,7 @@ export default function App() {
         {/* Member replied? Draft the next text */}
         <div style={{ marginTop: 22, paddingTop: 20, borderTop: `1px solid ${T.line}` }}>
           <p style={{ ...eyebrow, color: T.ink, fontWeight: 600, fontSize: 13 }}>Did {firstOf(m)} reply?</p>
-          <p style={{ margin: "2px 0 12px", fontSize: 13, color: T.muted }}>Paste their reply and we'll draft your response.</p>
+          <p style={{ margin: "2px 0 12px", fontSize: 13, color: T.muted }}>Texted replies show up in Outreach automatically. You can also paste one here.</p>
 
           {(convs[m.id] || []).length > 0 && (
             <div role="log" aria-label={`Conversation with ${m.name}`} style={{ maxHeight: 240, overflowY: "auto", marginBottom: 12, padding: "12px 14px", background: "#fff", border: `1px solid ${T.line}`, borderRadius: 10, display: "flex", flexDirection: "column", gap: 8 }}>
@@ -1105,7 +1203,7 @@ export default function App() {
                   {TABS.map(tab => (
                     <button key={tab} onClick={() => setActiveTab(tab)} aria-current={activeTab === tab ? "page" : undefined}
                       style={{ background: "none", border: "none", borderBottom: `2px solid ${activeTab === tab ? T.ink : "transparent"}`, padding: "0 2px", height: "100%", cursor: "pointer", fontFamily: SANS, fontSize: 14, fontWeight: activeTab === tab ? 600 : 400, color: activeTab === tab ? T.ink : T.muted }}>
-                      {tab}
+                      {tab}{tab === "Outreach" && waitingReplies > 0 && <span aria-label={`${waitingReplies} replies waiting`} style={{ marginLeft: 6, background: T.red, color: "#fff", borderRadius: 10, padding: "1px 7px", fontSize: 11, fontWeight: 600 }}>{waitingReplies}</span>}
                     </button>
                   ))}
                 </nav>
@@ -1120,7 +1218,7 @@ export default function App() {
                 {TABS.map(tab => (
                   <button key={tab} onClick={() => setActiveTab(tab)} aria-current={activeTab === tab ? "page" : undefined}
                     style={{ flex: 1, background: "none", border: "none", borderBottom: `2px solid ${activeTab === tab ? T.ink : "transparent"}`, padding: "11px 0", cursor: "pointer", fontFamily: SANS, fontSize: 14, fontWeight: activeTab === tab ? 600 : 400, color: activeTab === tab ? T.ink : T.muted }}>
-                    {tab}
+                    {tab}{tab === "Outreach" && waitingReplies > 0 && <span aria-label={`${waitingReplies} replies waiting`} style={{ marginLeft: 6, background: T.red, color: "#fff", borderRadius: 10, padding: "1px 7px", fontSize: 11, fontWeight: 600 }}>{waitingReplies}</span>}
                   </button>
                 ))}
               </nav>
@@ -1347,6 +1445,84 @@ export default function App() {
                     <Stat isMobile={isMobile} tone="good" label="Revenue saved" value={statByLabel["Revenue Saved"]} sub="per year" />
                   </div>
                 )}
+
+                {/* ── Member replies: texts captured automatically, with a drafted answer ── */}
+                {inbox && inbox.length > 0 && (() => {
+                  const waiting = inbox.filter(t => t.needsReply);
+                  const done = inbox.filter(t => !t.needsReply).slice(0, 5);
+                  const toneColor = { positive: T.green, hesitant: T.amberDark, leaving: T.redDark };
+                  const when = (iso) => { try { return new Date(iso).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }); } catch { return ""; } };
+                  const firstName = (th) => String(th.memberName || "Member").split(" ")[0];
+                  return (
+                    <section aria-label="Member replies" style={{ marginBottom: 28 }}>
+                      <div style={{ display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap", marginBottom: 4 }}>
+                        <h2 style={{ margin: 0, fontFamily: SERIF, fontSize: 20, fontWeight: 400, color: T.ink }}>Member replies</h2>
+                        {waiting.length > 0 && <span style={{ fontSize: 12, fontWeight: 600, color: T.redDark, background: T.redTint, padding: "2px 10px", borderRadius: 20 }}>{waiting.length} waiting</span>}
+                      </div>
+                      <p style={{ margin: "0 0 14px", fontSize: 14, color: T.muted }}>Texts members send back land here with a drafted answer. Nothing is sent until you approve it.</p>
+                      {waiting.length === 0 && (
+                        <div style={{ ...panel, padding: "16px 20px", fontSize: 14, color: T.muted, marginBottom: 12 }}>All caught up. No replies waiting.</div>
+                      )}
+                      <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+                        {waiting.map(th => {
+                          const busy = !!inboxBusy[th.memberId];
+                          const d = th.draft;
+                          const dim = busy ? { opacity: 0.5, cursor: "not-allowed" } : {};
+                          return (
+                            <div key={th.memberId} style={{ ...accentPanel(d?.escalate ? T.red : T.orange), padding: isMobile ? "14px 16px" : "18px 22px" }}>
+                              <div style={{ display: "flex", justifyContent: "space-between", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
+                                <span style={{ fontSize: 15, fontWeight: 600, color: T.ink }}>{th.memberName || "Member"}</span>
+                                <span style={{ fontSize: 12, color: T.faint }}>Replied {when(th.lastMemberAt)}</span>
+                              </div>
+                              <div role="log" aria-label={`Conversation with ${th.memberName}`} style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 14 }}>
+                                {th.turns.slice(-4).map((t, i) => (
+                                  <div key={i} style={{ alignSelf: t.role === "member" ? "flex-end" : "flex-start", maxWidth: isMobile ? "88%" : "75%" }}>
+                                    <p style={{ margin: "0 0 3px", fontSize: 11, color: T.faint, textAlign: t.role === "member" ? "right" : "left" }}>{t.role === "member" ? firstName(th) : "Studio"}</p>
+                                    <div style={{ background: t.role === "member" ? T.soft : "#eef0f6", borderRadius: 10, padding: "8px 12px", fontSize: 13, color: T.body, lineHeight: 1.5 }}>{t.text}</div>
+                                  </div>
+                                ))}
+                              </div>
+                              {d?.escalate && <p style={{ margin: "0 0 10px", fontSize: 13, color: T.redDark }}>We recommend you handle this one personally.</p>}
+                              {d ? (
+                                <div style={{ display: "flex", gap: 18, flexWrap: "wrap", marginBottom: 8, fontSize: 13 }}>
+                                  <span style={{ color: T.muted }}>Tone: <span style={{ color: toneColor[d.sentiment] || T.muted, textTransform: "capitalize" }}>{d.sentiment || "reply"}</span></span>
+                                  {offerLabels[d.suggestedOffer] && <span style={{ color: T.muted }}>Offer: <span style={{ color: T.ink }}>{offerLabels[d.suggestedOffer]}</span></span>}
+                                </div>
+                              ) : (
+                                <p style={{ margin: "0 0 8px", fontSize: 13, color: T.muted }}>No draft yet. Draft one, or write your own reply.</p>
+                              )}
+                              <textarea
+                                aria-label={`Your reply to ${th.memberName}`}
+                                value={inboxText(th)}
+                                onChange={e => setInboxEdits(prev => ({ ...prev, [th.memberId]: e.target.value }))}
+                                rows={3} maxLength={480}
+                                style={{ width: "100%", boxSizing: "border-box", border: `1px solid ${T.line}`, borderRadius: 10, padding: "10px 12px", fontSize: 14, fontFamily: SANS, resize: "vertical", outline: "none", background: "#fff", color: T.body, lineHeight: 1.5 }}
+                              />
+                              {d?.nextStep && <p style={{ margin: "8px 0 0", fontSize: 13, color: T.muted }}>Next step: {d.nextStep}</p>}
+                              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 12 }}>
+                                <button disabled={busy} onClick={() => sendInboxReply(th)} style={btn("send", dim)}>{busy ? "Working…" : "Send reply"}</button>
+                                <button disabled={busy} onClick={() => logInboxReply(th)} aria-label="Log reply without sending a text" style={btn("log", dim)}>Log as sent</button>
+                                <button disabled={busy} onClick={() => redraftInboxReply(th)} style={btn(d ? "ghost" : "draft", dim)}>{d ? "Redraft" : "Draft a reply"}</button>
+                                <button disabled={busy} onClick={() => handledInboxReply(th)} style={btn("ghost", dim)}>Mark handled</button>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                      {done.length > 0 && (
+                        <details style={{ marginTop: 12, fontSize: 13, color: T.muted }}>
+                          <summary style={{ cursor: "pointer" }}>Recently answered ({done.length})</summary>
+                          {done.map(th => (
+                            <p key={th.memberId} style={{ margin: 0, padding: "8px 0", borderBottom: `1px solid ${T.line}` }}>
+                              <span style={{ color: T.ink, fontWeight: 600 }}>{th.memberName}</span>: “{(th.turns.filter(t => t.role === "member").pop()?.text || "").slice(0, 80)}”
+                            </p>
+                          ))}
+                        </details>
+                      )}
+                    </section>
+                  );
+                })()}
+
 
                 {outreachLog.length === 0 ? (
                   <div style={{ ...panel, padding: "48px 24px", textAlign: "center" }}>
