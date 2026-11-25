@@ -5,6 +5,7 @@ import "@aws-amplify/ui-react/styles.css";
 import { awsConfig } from "./aws-config";
 import { buildStats, deriveRisk, isDemoPhone, pickTodaysQueue } from "./retention";
 import { parseMembersCSV, SAMPLE_CSV_HEADERS, SAMPLE_CSV_ROWS, SAMPLE_GYM_CSV } from "./importMembers";
+import { isStableId, newMemberId, withStableIds, normalizeMemberId, restoreResults } from "./memberStore";
 import { computeInsights } from "./strategist";
 import { IS_DEMO, exitDemoToSignUp, demoAnalyze, demoDraftReply, demoGetConversation, demoLogReplySent, demoCompetitiveIntel, demoInitialAiResults, demoInitialOutreach } from "./demo";
 import { listLocations, filterByLocation, summarizeLocations, ALL_LOCATIONS } from "./locations";
@@ -120,7 +121,9 @@ async function runClaudeAnalysis(member) {
   if (IS_DEMO) return demoAnalyze(member);
   const response = await apiFetch({
       action: "analyze",
-      memberId: member.id,
+      // Only roster members with a stable id get their analysis saved; sample
+      // members (ids 1–10) are analysed but not stored, so nothing mis-attaches.
+      ...(isStableId(member.id) ? { memberId: member.id } : {}),
       model: "claude-haiku-4-5",
       max_tokens: 400,
       messages: [{
@@ -174,12 +177,11 @@ async function sendRealSMS(toPhone, message) {
 
 // ─── Claude reply drafting (conversational retention) ────────────────────────
 // Reuses the existing secure Lambda "analyze" pass-through — no backend change
-// needed. The offset memberId keeps reply drafts from overwriting a member's
-// saved churn analysis. No API key ever touches the browser.
+// needed. No memberId is sent, so the draft is never saved over the member's
+// churn analysis. No API key ever touches the browser.
 async function runClaudeReply(member, originalMessage, memberReply) {
   const response = await apiFetch({
       action: "analyze",
-      memberId: 900000 + member.id,
       model: "claude-haiku-4-5-20251001",
       max_tokens: 500,
       messages: [{
@@ -224,6 +226,27 @@ async function draftReplyAgent(member, memberMessage, originalOutreach) {
   if (res.status === 400 && data.error === "Unknown action.") return null; // old Lambda
   if (!res.ok) throw new Error(data.error || `Server returned ${res.status}`);
   return data; // { success, draft, turns }
+}
+
+// ─── Roster persistence (Lambda "save_members" / "delete_members") ────────────
+// Returns true when saved, false when the deployed Lambda is older and doesn't
+// store rosters yet (so the app keeps working, just without saving).
+async function saveRoster(members, mode = "replace") {
+  if (IS_DEMO) return true;
+  const res = await apiFetch({ action: "save_members", mode, members });
+  const data = await res.json().catch(() => ({}));
+  if (res.status === 400 && data.error === "Unknown action.") return false;
+  if (!res.ok) throw new Error(data.error || `Server returned ${res.status}`);
+  return true;
+}
+
+async function clearSavedRoster() {
+  if (IS_DEMO) return true;
+  const res = await apiFetch({ action: "delete_members", all: true });
+  const data = await res.json().catch(() => ({}));
+  if (res.status === 400 && data.error === "Unknown action.") return false;
+  if (!res.ok) throw new Error(data.error || `Server returned ${res.status}`);
+  return true;
 }
 
 async function fetchConversation(memberId) {
@@ -405,20 +428,20 @@ export default function App() {
         const data = await res.json();
         if (cancelled) return;
 
-        // Restore AI results
-        if (data.memberResults && data.memberResults.length > 0) {
-          const restored = {};
-          data.memberResults.forEach(item => {
-            restored[Number(item.memberId)] = item.aiResult;
-          });
-          setAiResults(restored);
+        // Restore the saved roster and its analyses. Results for members who
+        // aren't on the saved roster (e.g. old ones keyed 1, 2, 3) are dropped,
+        // so they can never attach to the sample members.
+        if (Array.isArray(data.members) && data.members.length > 0) {
+          setMembers(data.members);
+          setUsingImported(true);
+          setAiResults(restoreResults(data.memberResults, data.members));
         }
 
         // Restore outreach logs
         if (data.outreachLogs && data.outreachLogs.length > 0) {
           const logs = data.outreachLogs.map(l => ({
             id:         Number(l.logId),
-            memberId:   Number(l.memberId),
+            memberId:   normalizeMemberId(l.memberId),
             memberName: l.memberName,
             plan:       l.plan,
             value:      l.value,
@@ -509,7 +532,8 @@ export default function App() {
 
   // ── Bring in a real member roster (parsed entirely in-browser) ─────────────
   // Replace the whole roster and reset the view so trends reflect it at once.
-  function applyRoster(list, label) {
+  function applyRoster(parsed, label) {
+    const list = withStableIds(parsed);
     setMembers(list);
     setUsingImported(true);
     setSelected(null);
@@ -519,6 +543,9 @@ export default function App() {
     setShowData(false);
     setActiveTab("Dashboard");
     showToast(`✓ Loaded ${list.length} members${label ? ` · ${label}` : ""}`);
+    saveRoster(list, "replace")
+      .then(ok => { if (!ok) showToast("Roster loaded, but the server can't save it yet — it will reset on reload"); })
+      .catch(err => showToast(`⚠ Roster loaded but not saved: ${err.message}`));
   }
 
   function loadSampleGym() {
@@ -557,13 +584,24 @@ export default function App() {
     const csv = SAMPLE_CSV_HEADERS.map(esc).join(",") + "\n" + row.map(esc).join(",");
     const parsed = parseMembersCSV(csv, Date.now());
     if (!parsed.length) { showToast("Add at least a name"); return; }
-    setMembers(prev => [...prev, { ...parsed[0], id: prev.reduce((mx, x) => Math.max(mx, x.id), 0) + 1 }]);
+    const added = { ...parsed[0], id: newMemberId() };
+    // Adding to the sample roster starts a real one: the sample members
+    // themselves aren't saved, so they'd vanish on reload anyway.
+    const startingFresh = !usingImported;
+    const next = startingFresh ? [added] : [...members, added];
+    setMembers(next);
+    if (startingFresh) { setAiResults({}); setSelected(null); }
     setUsingImported(true);
     setAddForm(blankMember);
-    showToast(`✓ Added ${parsed[0].name}`);
+    showToast(`✓ Added ${added.name}`);
+    saveRoster(startingFresh ? next : [added], startingFresh ? "replace" : "upsert")
+      .then(ok => { if (!ok) showToast("Member added, but the server can't save it yet — it will reset on reload"); })
+      .catch(err => showToast(`⚠ ${added.name} added but not saved: ${err.message}`));
   }
 
   function resetToDemo() {
+    if (!IS_DEMO && !window.confirm("Remove your saved roster and go back to the demo members? Saved analyses for these members are deleted too.")) return;
+    clearSavedRoster().catch(err => showToast(`⚠ Couldn't remove the saved roster: ${err.message}`));
     setMembers(initialMembers);
     setUsingImported(false);
     setSelected(null);
