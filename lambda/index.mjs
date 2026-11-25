@@ -6,7 +6,7 @@
 import https from "https";
 import crypto from "crypto";
 import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
-import { DynamoDBDocumentClient, PutCommand, GetCommand, ScanCommand, UpdateCommand } from "@aws-sdk/lib-dynamodb";
+import { DynamoDBDocumentClient, PutCommand, GetCommand, ScanCommand, UpdateCommand, BatchWriteCommand } from "@aws-sdk/lib-dynamodb";
 import { SESClient, SendEmailCommand } from "@aws-sdk/client-ses";
 
 // ─── DynamoDB setup ───────────────────────────────────────────────────────────
@@ -191,17 +191,119 @@ async function scanAllByTenant(TableName, tenantId) {
 }
 
 // ─── DynamoDB helpers ─────────────────────────────────────────────────────────
+// One item per member in pulseretain-members, key "<tenantId>#<memberId>".
+// The same item holds the member's roster profile ("profile") and their latest
+// churn analysis ("aiResult"), so updating one never wipes the other.
 async function saveMemberResult(tenantId, memberId, aiResult) {
-  await dynamo.send(new PutCommand({
+  await dynamo.send(new UpdateCommand({
     TableName: MEMBERS_TABLE,
-    Item: {
-      memberId: tKey(tenantId, memberId), // namespaced partition key
-      rawMemberId: String(memberId),      // the id the frontend uses
-      tenantId,
-      aiResult,
-      updatedAt: new Date().toISOString(),
+    Key: { memberId: tKey(tenantId, memberId) }, // namespaced partition key
+    UpdateExpression: "SET rawMemberId = :raw, tenantId = :t, aiResult = :ai, updatedAt = :now",
+    ExpressionAttributeValues: {
+      ":raw": String(memberId),                   // the id the frontend uses
+      ":t": tenantId,
+      ":ai": aiResult,
+      ":now": new Date().toISOString(),
     },
   }));
+}
+
+// ═══ MEMBER ROSTER — the gym's member list, saved server-side ══════════════════
+// Stable member ids are strings chosen by the client: "m_<uuid>" for CSV/manual
+// imports, "mb-<siteId>-<clientId>" for Mindbody sync. Small numeric ids (the
+// built-in sample roster, and legacy analyses saved before this existed) are
+// never stored as roster members, so they can't attach to the wrong person.
+const MEMBER_ID_RE   = /^(m_|mb-)[A-Za-z0-9_-]{1,80}$/;
+const MAX_ROSTER     = 5000;
+const STR_FIELDS     = ["name", "initials", "plan", "lastVisit", "usualVisits", "email", "phone", "location", "source", "externalId", "lastVisitDate"];
+const NUM_FIELDS     = ["score", "value", "joinedMonths", "missedPayments", "classesBooked"];
+const RISK_VALUES    = new Set(["high", "medium", "low"]);
+
+export function isStableMemberId(id) {
+  return typeof id === "string" && MEMBER_ID_RE.test(id);
+}
+
+// Whitelist and bound a member profile from the browser (or a sync job).
+export function cleanMemberProfile(m) {
+  if (!m || !isStableMemberId(m.id)) return null;
+  const name = typeof m.name === "string" ? m.name.trim().slice(0, 120) : "";
+  if (!name) return null;
+  const p = { id: m.id, name };
+  for (const f of STR_FIELDS) {
+    if (f === "name") continue;
+    if (m[f] != null && m[f] !== "") p[f] = String(m[f]).slice(0, 200);
+  }
+  for (const f of NUM_FIELDS) {
+    const n = Number(m[f]);
+    if (Number.isFinite(n)) p[f] = n;
+  }
+  p.risk = RISK_VALUES.has(m.risk) ? m.risk : "low";
+  return p;
+}
+
+async function batchWriteAll(requests) {
+  for (let i = 0; i < requests.length; i += 25) {
+    let pending = { [MEMBERS_TABLE]: requests.slice(i, i + 25) };
+    for (let attempt = 0; attempt < 5 && pending[MEMBERS_TABLE]?.length; attempt++) {
+      if (attempt) await new Promise(r => setTimeout(r, 100 * 2 ** attempt));
+      const res = await dynamo.send(new BatchWriteCommand({ RequestItems: pending }));
+      pending = res.UnprocessedItems || {};
+    }
+    if (pending[MEMBERS_TABLE]?.length) throw new Error("Couldn't save every member — please try again.");
+  }
+}
+
+// Insert or update members' profiles. Keeps each member's saved aiResult.
+// (Exported so the Mindbody sync can reuse it.)
+export async function upsertMembers(tenantId, members) {
+  const now = new Date().toISOString();
+  const clean = members.map(cleanMemberProfile).filter(Boolean);
+  // UpdateCommand (not Put) so a re-import or re-sync doesn't drop analyses.
+  // Run in small parallel chunks to stay well inside Lambda time limits.
+  const base = Date.now() * 1000; // room for 1,000 members per millisecond (stays below 2^53)
+  for (let i = 0; i < clean.length; i += 25) {
+    await Promise.all(clean.slice(i, i + 25).map((p, j) => dynamo.send(new UpdateCommand({
+      TableName: MEMBERS_TABLE,
+      Key: { memberId: tKey(tenantId, p.id) },
+      UpdateExpression: "SET rawMemberId = :raw, tenantId = :t, profile = :p, sortOrder = if_not_exists(sortOrder, :o), updatedAt = :now",
+      ExpressionAttributeValues: { ":raw": p.id, ":t": tenantId, ":p": p, ":o": base + i + j, ":now": now },
+    }))));
+  }
+  return clean.length;
+}
+
+// Replace the imported roster: delete this gym's member items (including
+// legacy analyses keyed 1, 2, 3…), then write the new list in import order.
+// Mindbody-synced members ("mb-" ids) are owned by the sync and kept.
+async function replaceRoster(tenantId, members) {
+  const existing = (await scanAllByTenant(MEMBERS_TABLE, tenantId))
+    .filter(i => !String(i.rawMemberId ?? "").startsWith("mb-"));
+  await batchWriteAll(existing.map(i => ({ DeleteRequest: { Key: { memberId: i.memberId } } })));
+  const now = new Date().toISOString();
+  const base = Date.now() * 1000; // same ordering scale as upsertMembers
+  const clean = members.map(cleanMemberProfile).filter(Boolean);
+  await batchWriteAll(clean.map((p, idx) => ({
+    PutRequest: { Item: { memberId: tKey(tenantId, p.id), rawMemberId: p.id, tenantId, profile: p, sortOrder: base + idx, updatedAt: now } },
+  })));
+  return clean.length;
+}
+
+async function deleteMembers(tenantId, ids) {
+  const keys = ids.filter(isStableMemberId).map(id => ({ DeleteRequest: { Key: { memberId: tKey(tenantId, id) } } }));
+  await batchWriteAll(keys);
+  return keys.length;
+}
+
+// Saved roster (in import order) plus analyses for those members only.
+async function loadRoster(tenantId) {
+  const items = await scanAllByTenant(MEMBERS_TABLE, tenantId);
+  const rows = items
+    .filter(i => i.profile && isStableMemberId(i.rawMemberId))
+    .sort((a, b) => (a.sortOrder || 0) - (b.sortOrder || 0));
+  return {
+    members: rows.map(i => i.profile),
+    memberResults: rows.filter(i => i.aiResult).map(i => ({ memberId: i.rawMemberId, aiResult: i.aiResult })),
+  };
 }
 
 // NOTE: the pulseretain-outreach table's partition key is "logID" (capital ID),
@@ -221,12 +323,6 @@ async function saveOutreachLog(tenantId, log) {
       savedAt: new Date().toISOString(),
     },
   }));
-}
-
-async function loadAllMemberResults(tenantId) {
-  const items = await scanAllByTenant(MEMBERS_TABLE, tenantId);
-  // Expose the raw memberId the frontend expects, not the namespaced key.
-  return items.map(i => ({ ...i, memberId: i.rawMemberId ?? i.memberId }));
 }
 
 async function loadAllOutreachLogs(tenantId) {
@@ -668,8 +764,9 @@ export const handler = async (event) => {
       );
       const claudeData = JSON.parse(response.body);
 
-      // Parse and save the AI result to DynamoDB
-      if (body.memberId && claudeData.content) {
+      // Parse and save the AI result to DynamoDB — only for members with a
+      // stable id, so sample-roster (1, 2, 3…) analyses never get stored.
+      if (isStableMemberId(body.memberId) && claudeData.content) {
         const raw   = claudeData.content.filter(b => b.type === "text").map(b => b.text).join("").trim();
         const match = raw.match(/\{[\s\S]*\}/);
         if (match) {
@@ -900,16 +997,43 @@ export const handler = async (event) => {
 
     // (submit_lead is handled earlier as a public route, before the auth gate.)
 
+    // ── Route: "save_members" — persist the roster ────────────────────────────
+    // mode "replace" (CSV import / sample gym): the list becomes the roster.
+    // mode "upsert" (add one member): add or update these members only.
+    if (body.action === "save_members") {
+      const list = Array.isArray(body.members) ? body.members : null;
+      const mode = body.mode === "upsert" ? "upsert" : "replace";
+      if (!list || list.length > MAX_ROSTER) {
+        return { statusCode: 400, headers: CORS, body: JSON.stringify({ error: `Send between 0 and ${MAX_ROSTER} members.` }) };
+      }
+      const saved = mode === "upsert" ? await upsertMembers(tenantId, list) : await replaceRoster(tenantId, list);
+      return { statusCode: 200, headers: { ...CORS, "Content-Type": "application/json" }, body: JSON.stringify({ success: true, saved, skipped: list.length - saved }) };
+    }
+
+    // ── Route: "delete_members" — remove members (or all, to go back to demo) ─
+    if (body.action === "delete_members") {
+      let removed;
+      if (body.all === true) {
+        const existing = await scanAllByTenant(MEMBERS_TABLE, tenantId);
+        await batchWriteAll(existing.map(i => ({ DeleteRequest: { Key: { memberId: i.memberId } } })));
+        removed = existing.length;
+      } else {
+        removed = await deleteMembers(tenantId, Array.isArray(body.ids) ? body.ids : []);
+      }
+      return { statusCode: 200, headers: { ...CORS, "Content-Type": "application/json" }, body: JSON.stringify({ success: true, removed }) };
+    }
+
     // ── Route: "load_data" — fetch all saved data on page load ───────────────
     if (body.action === "load_data") {
-      const [memberResults, outreachLogs] = await Promise.all([
-        loadAllMemberResults(tenantId),
+      const [roster, outreachLogs] = await Promise.all([
+        loadRoster(tenantId),
         loadAllOutreachLogs(tenantId),
       ]);
       return {
         statusCode: 200,
         headers: { ...CORS, "Content-Type": "application/json" },
-        body: JSON.stringify({ memberResults, outreachLogs }),
+        // rosterSaved tells the app this Lambda version stores rosters at all.
+        body: JSON.stringify({ members: roster.members, memberResults: roster.memberResults, outreachLogs, rosterSaved: true }),
       };
     }
 
