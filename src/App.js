@@ -6,6 +6,7 @@ import { awsConfig } from "./aws-config";
 import { buildStats, deriveRisk, isDemoPhone, pickTodaysQueue } from "./retention";
 import { parseMembersCSV, SAMPLE_CSV_HEADERS, SAMPLE_CSV_ROWS, SAMPLE_GYM_CSV } from "./importMembers";
 import { computeInsights } from "./strategist";
+import { IS_DEMO, exitDemoToSignUp, demoAnalyze, demoDraftReply, demoGetConversation, demoLogReplySent, demoCompetitiveIntel, demoInitialAiResults, demoInitialOutreach } from "./demo";
 import { listLocations, filterByLocation, summarizeLocations, ALL_LOCATIONS } from "./locations";
 import { useState, useMemo, useEffect, useRef } from "react";
 
@@ -69,6 +70,7 @@ function useInstallPrompt() {
 // Every request to the Lambda carries the signed-in user's Cognito token, so the
 // backend can reject anyone who isn't logged in. Keys never touch the browser.
 async function apiFetch(payload) {
+  if (IS_DEMO) return new Response(JSON.stringify({ success: true }), { status: 200, headers: { "Content-Type": "application/json" } });
   let auth = {};
   try {
     const token = (await fetchAuthSession()).tokens?.accessToken?.toString();
@@ -115,6 +117,7 @@ const LAMBDA_URL = "https://duu25rkvvopryctqwaxzleqxg40nbcqf.lambda-url.us-east-
 
 // ─── Claude analysis ──────────────────────────────────────────────────────────
 async function runClaudeAnalysis(member) {
+  if (IS_DEMO) return demoAnalyze(member);
   const response = await apiFetch({
       action: "analyze",
       memberId: member.id,
@@ -153,6 +156,7 @@ Current risk score: ${member.score}/100`
 // Sample members have fictional 555 numbers that no carrier can deliver to, so
 // those sends are simulated (and labelled as such) instead of failing.
 async function sendRealSMS(toPhone, message) {
+  if (IS_DEMO) { await new Promise(r => setTimeout(r, 700)); return { success: true, simulated: true }; } // demo never texts anyone
   if (isDemoPhone(toPhone)) {
     await new Promise(r => setTimeout(r, 700));
     return { success: true, simulated: true };
@@ -205,6 +209,7 @@ Member: ${member.name}, on ${member.plan} ($${member.value}/mo), ${member.joined
 // can fall back to the legacy inline-prompt path — pushing this frontend can
 // never break the live app.
 async function draftReplyAgent(member, memberMessage, originalOutreach) {
+  if (IS_DEMO) return demoDraftReply(member, memberMessage, originalOutreach);
   const res = await apiFetch({
     action: "draft_reply",
     memberId: member.id,
@@ -222,6 +227,7 @@ async function draftReplyAgent(member, memberMessage, originalOutreach) {
 }
 
 async function fetchConversation(memberId) {
+  if (IS_DEMO) return demoGetConversation(memberId);
   const res = await apiFetch({ action: "get_conversation", memberId });
   if (!res.ok) return null; // old Lambda or error — thread UI just stays hidden
   const data = await res.json().catch(() => null);
@@ -229,6 +235,7 @@ async function fetchConversation(memberId) {
 }
 
 async function logReplySent(member, text) {
+  if (IS_DEMO) return demoLogReplySent(member, text);
   const res = await apiFetch({ action: "log_reply_sent", memberId: member.id, memberName: member.name, text });
   if (!res.ok) return null;
   const data = await res.json().catch(() => null);
@@ -238,6 +245,7 @@ async function logReplySent(member, text) {
 // Competitive Intelligence — aggregates where/why members say they're leaving
 // (consent-based, from their own replies; never location tracking).
 async function fetchCompetitiveIntel() {
+  if (IS_DEMO) return demoCompetitiveIntel();
   const res = await apiFetch({ action: "get_competitive_intel" });
   if (!res.ok) return null;
   return res.json().catch(() => null);
@@ -334,13 +342,20 @@ const authComponents = {
   },
 };
 
+// Demo mode skips sign-in entirely; everyone else gets the normal Cognito login.
+const DEMO_USER = { signInDetails: { loginId: "Demo gym · sample data" } };
+function AuthGate({ children }) {
+  if (IS_DEMO) return children({ signOut: exitDemoToSignUp, user: DEMO_USER });
+  return <Authenticator components={authComponents}>{children}</Authenticator>;
+}
+
 export default function App() {
   const isMobile = useIsMobile();
   const install = useInstallPrompt();
   const [installDismissed, setInstallDismissed] = useState(() => {
     try { return localStorage.getItem("pulseretain-install-dismissed") === "1"; } catch { return false; }
   });
-  const showInstall = !install.isStandalone && !installDismissed && (install.canInstall || install.isIOSSafari);
+  const showInstall = !IS_DEMO && !install.isStandalone && !installDismissed && (install.canInstall || install.isIOSSafari);
   function dismissInstall() {
     setInstallDismissed(true);
     try { localStorage.setItem("pulseretain-install-dismissed", "1"); } catch { /* private mode */ }
@@ -354,11 +369,11 @@ export default function App() {
   const blankMember = { name: "", plan: "", value: "", lastVisit: "", joinDate: "", missedPayments: "", classesBooked: "", schedule: "", email: "", phone: "", location: "" };
   const [addForm, setAddForm]         = useState(blankMember);
   const [selected, setSelected]       = useState(null);
-  const [aiResults, setAiResults]     = useState({});
+  const [aiResults, setAiResults]     = useState(() => (IS_DEMO ? demoInitialAiResults(initialMembers) : {}));
   const [loading, setLoading]         = useState({});
   const [analyzing, setAnalyzing]     = useState(false);
   const [activeTab, setActiveTab]     = useState("Dashboard");
-  const [outreachLog, setOutreachLog] = useState([]);
+  const [outreachLog, setOutreachLog] = useState(() => (IS_DEMO ? demoInitialOutreach() : []));
   const [filterRisk, setFilterRisk]   = useState("all");
   const [filterLocation, setFilterLocation] = useState(ALL_LOCATIONS); // multi-location: which site is in view
   const [modalMember, setModalMember] = useState(null);
@@ -369,7 +384,7 @@ export default function App() {
   const [intelLoading, setIntelLoading] = useState(false);
   const [dismissedToday, setDismissedToday] = useState(new Set()); // "Today's 3" skips
   const [toast, setToast]             = useState(null);
-  const [dataLoading, setDataLoading] = useState(true);
+  const [dataLoading, setDataLoading] = useState(!IS_DEMO);
   const [search, setSearch]           = useState("");
   const [replyText, setReplyText]       = useState({});   // member's pasted reply, keyed by member id
   const [replyDrafts, setReplyDrafts]   = useState({});   // Claude's drafted response, keyed by member id
@@ -382,7 +397,7 @@ export default function App() {
   // (load_data now requires a Cognito token, so we wait for authentication
   //  instead of firing on mount — which also avoids a wasted pre-login call.)
   useEffect(() => {
-    if (authStatus !== "authenticated") return;
+    if (IS_DEMO || authStatus !== "authenticated") return;
     let cancelled = false;
     async function loadData() {
       try {
@@ -610,9 +625,9 @@ export default function App() {
     try {
       const res = await sendRealSMS(member.phone, ai.message);
       setSmsSent(prev => new Set([...prev, member.id]));
-      markOutreach(member, ai, true);
+      await markOutreach(member, ai, true); // finish logging first so its toast doesn't replace this one
       showToast(res.simulated
-        ? `📱 Text sent to ${member.name.split(" ")[0]} (sample member — simulated)`
+        ? `📱 Text to ${member.name.split(" ")[0]} logged (${IS_DEMO ? "demo" : "sample member"} — no real text sent)`
         : `📱 SMS sent to ${member.name.split(" ")[0]}!`);
     } catch (err) {
       showToast(`❌ SMS failed: ${err.message}`);
@@ -659,7 +674,7 @@ export default function App() {
       const res = await sendRealSMS(member.phone, draft.reply);
       await recordReplyOnThread(member, draft.reply);
       showToast(res.simulated
-        ? `📱 Reply sent to ${member.name.split(" ")[0]} (sample member — simulated)`
+        ? `📱 Reply to ${member.name.split(" ")[0]} logged (${IS_DEMO ? "demo" : "sample member"} — no real text sent)`
         : `📱 Reply sent to ${member.name.split(" ")[0]}!`);
     } catch (err) {
       showToast(`❌ Reply failed: ${err.message}`);
@@ -790,7 +805,7 @@ export default function App() {
     <>
     <ThemeProvider theme={pulseTheme}>
     <div className="pulse-auth-bg" style={{ minHeight: "100vh", background: "linear-gradient(165deg,#15152b 0%,#1a1a2e 45%,#262652 100%)" }}>
-    <Authenticator components={authComponents}>
+    <AuthGate>
       {({ signOut, user }) => (
         <div style={{ minHeight: "100vh", background: "#f5f6fa", fontFamily: "'Georgia', serif" }}>
 
@@ -816,7 +831,7 @@ export default function App() {
                 <span style={{ color: "#fff", fontWeight: 700, fontSize: 16, letterSpacing: 0.5 }}>PulseRetain</span>
               </div>
               {isMobile && (
-                <button onClick={signOut} style={{ background: "transparent", border: "1px solid #444", color: "#ccc", padding: "5px 12px", borderRadius: 6, cursor: "pointer", fontSize: 12 }}>Sign out</button>
+                <button onClick={signOut} style={{ background: "transparent", border: "1px solid #444", color: "#ccc", padding: "5px 12px", borderRadius: 6, cursor: "pointer", fontSize: 12 }}>{IS_DEMO ? "Sign up" : "Sign out"}</button>
               )}
             </div>
 
@@ -825,11 +840,11 @@ export default function App() {
               {TABS.map(tab => (
                 <button
                   key={tab}
-                  onClick={() => setActiveTab(tab)}
+                  onClick={(e) => { setActiveTab(tab); if (isMobile && e.currentTarget.scrollIntoView) e.currentTarget.scrollIntoView({ inline: "nearest", block: "nearest" }); }}
                   style={{
                     background: activeTab === tab ? "rgba(231,76,60,0.2)" : "transparent",
                     border: "none", color: activeTab === tab ? "#e74c3c" : "#aaa",
-                    padding: "6px 16px", borderRadius: 6, cursor: "pointer",
+                    padding: isMobile ? "6px 11px" : "6px 16px", borderRadius: 6, cursor: "pointer",
                     fontSize: 13, fontWeight: activeTab === tab ? 700 : 400,
                     transition: "all 0.15s", whiteSpace: "nowrap", flexShrink: 0,
                   }}
@@ -840,14 +855,22 @@ export default function App() {
             {!isMobile && (
               <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
                 <span style={{ color: "#aaa", fontSize: 13 }}>{user?.signInDetails?.loginId}</span>
-                <button onClick={signOut} style={{ background: "transparent", border: "1px solid #444", color: "#ccc", padding: "5px 14px", borderRadius: 6, cursor: "pointer", fontSize: 12 }}>Sign out</button>
+                <button onClick={signOut} style={{ background: "transparent", border: "1px solid #444", color: "#ccc", padding: "5px 14px", borderRadius: 6, cursor: "pointer", fontSize: 12 }}>{IS_DEMO ? "Sign up" : "Sign out"}</button>
               </div>
             )}
           </div>
 
+          {/* ── Demo banner (public no-login demo from the poster QR code) ── */}
+          {IS_DEMO && (
+            <div role="note" style={{ background: "#fff4e5", borderBottom: "1px solid #f5d29a", color: "#7a4b00", padding: isMobile ? "9px 12px" : "10px 32px", display: "flex", alignItems: "center", justifyContent: "center", flexWrap: "wrap", gap: isMobile ? 8 : 14, fontSize: 13, lineHeight: 1.4, textAlign: "center" }}>
+              <span>👋 <b>You're exploring a demo gym</b> with sample members. No texts are sent.</span>
+              <button onClick={exitDemoToSignUp} style={{ background: "#1a1a2e", color: "#fff", border: "none", borderRadius: 8, padding: "6px 14px", fontSize: 12, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap" }}>Sign up to use your own members →</button>
+            </div>
+          )}
+
           {/* ── Toast ── */}
           {toast && (
-            <div role="status" aria-live="polite" style={{ position: "fixed", bottom: 28, left: "50%", transform: "translateX(-50%)", background: "#1a1a2e", color: "#fff", padding: "10px 22px", borderRadius: 10, fontSize: 13, fontWeight: 600, zIndex: 9999, boxShadow: "0 4px 20px rgba(0,0,0,0.3)" }}>
+            <div role="status" aria-live="polite" style={{ position: "fixed", bottom: 28, left: "50%", transform: "translateX(-50%)", background: "#1a1a2e", color: "#fff", padding: "10px 22px", borderRadius: 10, fontSize: 13, fontWeight: 600, zIndex: 9999, boxShadow: "0 4px 20px rgba(0,0,0,0.3)", width: "max-content", maxWidth: "calc(100vw - 32px)", boxSizing: "border-box", textAlign: "center" }}>
               {toast}
             </div>
           )}
@@ -860,9 +883,9 @@ export default function App() {
             {activeTab === "Dashboard" && (
               <>
                 {/* Title + AI button */}
-                <div style={{ marginBottom: 28, display: "flex", flexDirection: "row", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 16 }}>
+                <div style={{ marginBottom: isMobile ? 18 : 28, display: "flex", flexDirection: "row", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: isMobile ? 12 : 16 }}>
                   <div>
-                    <h1 style={{ margin: 0, fontSize: 26, fontWeight: 700, color: "#1a1a2e" }}>Member Retention Dashboard</h1>
+                    <h1 style={{ margin: 0, fontSize: isMobile ? 21 : 26, fontWeight: 700, color: "#1a1a2e" }}>Member Retention Dashboard</h1>
                     <p style={{ margin: "4px 0 0", color: "#888", fontSize: 14 }}>
                       {usingImported ? "Your imported roster" : "Pulse Studio"} · {scopedMembers.length} {filterLocation === ALL_LOCATIONS ? "active members" : `members at ${filterLocation}`}
                       {usingImported && (
@@ -870,7 +893,7 @@ export default function App() {
                       )}
                     </p>
                   </div>
-                  <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+                  <div style={{ display: "flex", gap: isMobile ? 8 : 10, alignItems: "center", flexWrap: "wrap" }}>
                     {/* Search */}
                     <input
                       type="text"
@@ -878,7 +901,7 @@ export default function App() {
                       onChange={e => setSearch(e.target.value)}
                       placeholder="Search members…"
                       aria-label="Search members by name"
-                      style={{ padding: "8px 12px", borderRadius: 20, border: "1px solid #ddd", fontSize: 12, outline: "none", minWidth: 150 }}
+                      style={{ padding: "8px 12px", borderRadius: 20, border: "1px solid #ddd", fontSize: isMobile ? 16 : 12, outline: "none", minWidth: 150, ...(isMobile ? { flex: "1 1 100%", boxSizing: "border-box" } : {}) }}
                     />
                     {/* Location filter — shown only when the owner has more than one site */}
                     {locations.length > 1 && (
@@ -925,27 +948,29 @@ export default function App() {
                         color: "#fff", border: "none", borderRadius: 10, padding: "10px 20px",
                         fontSize: 13, fontWeight: 700, cursor: analyzing ? "not-allowed" : "pointer",
                         boxShadow: analyzing ? "none" : "0 4px 14px rgba(231,76,60,0.35)",
-                        whiteSpace: "nowrap",
+                        whiteSpace: "nowrap", ...(isMobile ? { flex: "1 1 auto" } : {}),
                       }}
                     >{analyzing ? "⏳ Analyzing..." : "⚡ Run AI Analysis"}</button>
                     <button
                       onClick={exportMembersCSV}
                       aria-label="Export member list as CSV"
-                      style={{ background: "#fff", color: "#1a1a2e", border: "1px solid #ddd", borderRadius: 10, padding: "10px 16px", fontSize: 13, fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap" }}
+                      style={{ background: "#fff", color: "#1a1a2e", border: "1px solid #ddd", borderRadius: 10, padding: "10px 16px", fontSize: 13, fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap", ...(isMobile ? { flex: "1 1 auto" } : {}) }}
                     >⬇ Export CSV</button>
                     <button
                       onClick={() => setShowData(true)}
                       aria-label="Add or import your gym's members"
-                      style={{ background: "#1a1a2e", color: "#fff", border: "none", borderRadius: 10, padding: "10px 16px", fontSize: 13, fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap" }}
+                      style={{ background: "#1a1a2e", color: "#fff", border: "none", borderRadius: 10, padding: "10px 16px", fontSize: 13, fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap", ...(isMobile ? { flex: "1 1 auto" } : {}) }}
                     >➕ Add Members</button>
                   </div>
                 </div>
 
                 {/* ── Locations overview (who is where) — tap a card to filter ── */}
                 {locations.length > 1 && (
-                  <div style={{ marginBottom: 28 }}>
-                    <p style={{ margin: "0 0 10px", fontSize: 13, fontWeight: 600, color: "#888" }}>Your locations · tap to filter</p>
-                    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 12 }}>
+                  <div style={{ marginBottom: isMobile ? 18 : 28 }}>
+                    <p style={{ margin: "0 0 10px", fontSize: 13, fontWeight: 600, color: "#888" }}>Your locations · {isMobile ? "swipe, tap to filter" : "tap to filter"}</p>
+                    <div style={isMobile
+                      ? { display: "flex", gap: 10, overflowX: "auto", WebkitOverflowScrolling: "touch", margin: "0 -12px", padding: "2px 12px 6px", scrollSnapType: "x proximity" }
+                      : { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 12 }}>
                       {[{ location: ALL_LOCATIONS, total: members.length, high: members.filter(m => m.risk === "high").length, revenue: members.reduce((a, m) => a + (m.value || 0), 0) }, ...locationSummary].map(loc => {
                         const isAll  = loc.location === ALL_LOCATIONS;
                         const active = filterLocation === loc.location;
@@ -954,7 +979,7 @@ export default function App() {
                             key={loc.location}
                             onClick={() => setFilterLocation(loc.location)}
                             aria-pressed={active}
-                            style={{ textAlign: "left", cursor: "pointer", fontFamily: "inherit", borderRadius: 12, padding: "14px 16px", boxShadow: "0 1px 4px rgba(0,0,0,0.06)", background: active ? "#1a1a2e" : "#fff", color: active ? "#fff" : "#1a1a2e", border: active ? "2px solid #1a1a2e" : "1px solid #eee" }}
+                            style={{ textAlign: "left", cursor: "pointer", fontFamily: "inherit", borderRadius: 12, padding: isMobile ? "11px 14px" : "14px 16px", ...(isMobile ? { flex: "0 0 auto", minWidth: 148, scrollSnapAlign: "start" } : {}), boxShadow: "0 1px 4px rgba(0,0,0,0.06)", background: active ? "#1a1a2e" : "#fff", color: active ? "#fff" : "#1a1a2e", border: active ? "2px solid #1a1a2e" : "1px solid #eee" }}
                           >
                             <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 14, fontWeight: 700 }}>
                               <span>{isAll ? "🏢" : "📍"}</span>{isAll ? "All locations" : loc.location}
@@ -971,7 +996,7 @@ export default function App() {
                 )}
 
                 {/* ── Today's Priorities (the daily action queue) ── */}
-                <div style={{ background: "linear-gradient(135deg,#1a1a2e,#23234a)", borderRadius: 16, padding: "20px 24px", marginBottom: 28, boxShadow: "0 4px 18px rgba(26,26,46,0.18)" }}>
+                <div style={{ background: "linear-gradient(135deg,#1a1a2e,#23234a)", borderRadius: 16, padding: isMobile ? "16px 12px" : "20px 24px", marginBottom: isMobile ? 20 : 28, boxShadow: "0 4px 18px rgba(26,26,46,0.18)" }}>
                   <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10, marginBottom: todaysQueue.length ? 16 : 0 }}>
                     <div>
                       <h2 style={{ margin: 0, fontSize: 17, fontWeight: 700, color: "#fff" }}>☀️ Today's Priorities</h2>
@@ -989,7 +1014,7 @@ export default function App() {
                   </div>
 
                   {todaysQueue.length > 0 && (
-                    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 12 }}>
+                    <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "repeat(auto-fit, minmax(280px, 1fr))", gap: 12 }}>
                       {todaysQueue.map(m => {
                         const rc = riskConfig[deriveRisk(m, aiResults[m.id])];
                         const ai = aiResults[m.id];
@@ -1031,9 +1056,9 @@ export default function App() {
                 </div>
 
                 {/* Stats */}
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 14, marginBottom: 32 }}>
+                <div style={{ display: "grid", gridTemplateColumns: isMobile ? "repeat(2, 1fr)" : "repeat(auto-fit, minmax(160px, 1fr))", gap: isMobile ? 10 : 14, marginBottom: isMobile ? 20 : 32 }}>
                   {stats.map((s, i) => (
-                    <div key={i} style={{ background: "#fff", borderRadius: 12, padding: "18px 20px", boxShadow: "0 1px 4px rgba(0,0,0,0.07)", borderTop: s.accent ? "3px solid #e74c3c" : "3px solid #1a1a2e" }}>
+                    <div key={i} style={{ background: "#fff", borderRadius: 12, padding: isMobile ? "14px 14px" : "18px 20px", boxShadow: "0 1px 4px rgba(0,0,0,0.07)", borderTop: s.accent ? "3px solid #e74c3c" : "3px solid #1a1a2e" }}>
                       <p style={{ margin: 0, fontSize: 24, fontWeight: 700, color: s.accent ? "#e74c3c" : "#1a1a2e" }}>{s.value}</p>
                       <p style={{ margin: "2px 0 0", fontSize: 12, color: "#888" }}>{s.label}</p>
                       <p style={{ margin: "1px 0 0", fontSize: 11, color: "#bbb" }}>{s.sub}</p>
@@ -1043,9 +1068,9 @@ export default function App() {
 
                 {/* Member table */}
                 <div style={{ background: "#fff", borderRadius: 14, boxShadow: "0 1px 4px rgba(0,0,0,0.07)", overflow: "hidden" }}>
-                  <div style={{ padding: "18px 24px", borderBottom: "1px solid #f0f0f0", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <div style={{ padding: isMobile ? "14px 16px" : "18px 24px", borderBottom: "1px solid #f0f0f0", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
                     <h2 style={{ margin: 0, fontSize: 16, fontWeight: 700, color: "#1a1a2e" }}>Member Risk Monitor</h2>
-                    <span style={{ background: "#fff1f1", color: "#c0392b", fontSize: 12, fontWeight: 600, padding: "3px 10px", borderRadius: 20 }}>
+                    <span style={{ background: "#fff1f1", color: "#c0392b", fontSize: 12, fontWeight: 600, padding: "3px 10px", borderRadius: 20, whiteSpace: "nowrap" }}>
                       {scopedMembers.filter(m => m.risk === "high").length} need attention
                     </span>
                   </div>
@@ -1174,7 +1199,7 @@ export default function App() {
                               </div>
                             ) : ai ? (
                               <div>
-                                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 14, marginBottom: 14 }}>
+                                <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr 1fr", gap: isMobile ? 10 : 14, marginBottom: 14 }}>
                                   <div style={{ background: "#fff", border: "1px solid #e8e8e8", borderRadius: 10, padding: "12px 16px" }}>
                                     <p style={{ margin: "0 0 4px", fontSize: 11, fontWeight: 600, color: "#aaa", textTransform: "uppercase", letterSpacing: 0.5 }}>AI Risk Assessment</p>
                                     <p style={{ margin: 0, fontSize: 13, color: "#333", lineHeight: 1.6 }}>{ai.reason}</p>
@@ -1400,15 +1425,15 @@ export default function App() {
                   <p style={{ margin: "4px 0 0", color: "#888", fontSize: 14 }}>Revenue at risk, member health, and outreach effectiveness</p>
                 </div>
 
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 16, marginBottom: 24 }}>
+                <div style={{ display: "grid", gridTemplateColumns: isMobile ? "repeat(2, 1fr)" : "repeat(auto-fit, minmax(200px, 1fr))", gap: isMobile ? 10 : 16, marginBottom: 24 }}>
                   {[
                     { label: "Monthly Revenue at Risk", value: `$${analyticsData.atRiskRevenue}/mo`, sub: `From ${members.filter(m=>m.risk==="high").length} high-risk members`, accent: true },
                     { label: "Total Monthly Revenue",    value: `$${analyticsData.totalRevenue}/mo`, sub: `Across all ${members.length} members`, accent: false },
                     { label: "Avg Churn Risk Score",     value: `${analyticsData.avgRisk}/100`,      sub: "Across all members", accent: analyticsData.avgRisk > 50 },
                     { label: "Outreach Logged",          value: `${outreachLog.length}`,             sub: `${outreachLog.filter(o=>o.status==="recovered").length} recovered`, accent: false },
                   ].map((c, i) => (
-                    <div key={i} style={{ background: "#fff", borderRadius: 12, padding: "20px 22px", boxShadow: "0 1px 4px rgba(0,0,0,0.07)", borderTop: c.accent ? "3px solid #e74c3c" : "3px solid #1a1a2e" }}>
-                      <p style={{ margin: 0, fontSize: 26, fontWeight: 700, color: c.accent ? "#e74c3c" : "#1a1a2e" }}>{c.value}</p>
+                    <div key={i} style={{ background: "#fff", borderRadius: 12, padding: isMobile ? "14px 14px" : "20px 22px", boxShadow: "0 1px 4px rgba(0,0,0,0.07)", borderTop: c.accent ? "3px solid #e74c3c" : "3px solid #1a1a2e" }}>
+                      <p style={{ margin: 0, fontSize: isMobile ? 22 : 26, fontWeight: 700, color: c.accent ? "#e74c3c" : "#1a1a2e" }}>{c.value}</p>
                       <p style={{ margin: "3px 0 0", fontSize: 12, color: "#555" }}>{c.label}</p>
                       <p style={{ margin: "1px 0 0", fontSize: 11, color: "#aaa" }}>{c.sub}</p>
                     </div>
@@ -1494,14 +1519,14 @@ export default function App() {
                 </div>
 
                 {/* Headline metrics */}
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", gap: 16, marginBottom: 22 }}>
+                <div style={{ display: "grid", gridTemplateColumns: isMobile ? "repeat(2, 1fr)" : "repeat(auto-fit, minmax(190px, 1fr))", gap: isMobile ? 10 : 16, marginBottom: 22 }}>
                   {[
                     { label: "Members at Risk", value: String(insights.atRisk), sub: "high-risk right now", accent: insights.atRisk > 0 },
                     { label: "Revenue at Risk", value: `$${insights.revenueAtRisk.toLocaleString()}/mo`, sub: `≈ $${insights.projectedAnnual.toLocaleString()}/yr`, accent: insights.revenueAtRisk > 0 },
                     { label: "Biggest Leak", value: insights.topLeak ? "1 priority" : "—", sub: insights.topLeak || "no major leak detected", accent: false, small: true },
                   ].map((c, i) => (
-                    <div key={i} style={{ background: "#fff", borderRadius: 12, padding: "18px 20px", boxShadow: "0 1px 4px rgba(0,0,0,0.07)", borderTop: c.accent ? "3px solid #e74c3c" : "3px solid #1a1a2e" }}>
-                      <p style={{ margin: 0, fontSize: c.small ? 14 : 26, fontWeight: 700, color: c.accent ? "#e74c3c" : "#1a1a2e", lineHeight: 1.3 }}>{c.value}</p>
+                    <div key={i} style={{ background: "#fff", borderRadius: 12, padding: isMobile ? "14px 14px" : "18px 20px", boxShadow: "0 1px 4px rgba(0,0,0,0.07)", borderTop: c.accent ? "3px solid #e74c3c" : "3px solid #1a1a2e" }}>
+                      <p style={{ margin: 0, fontSize: c.small ? 14 : (isMobile ? 22 : 26), fontWeight: 700, color: c.accent ? "#e74c3c" : "#1a1a2e", lineHeight: 1.3 }}>{c.value}</p>
                       <p style={{ margin: "3px 0 0", fontSize: 12, color: "#555" }}>{c.label}</p>
                       <p style={{ margin: "1px 0 0", fontSize: 11, color: "#aaa" }}>{c.sub}</p>
                     </div>
@@ -1568,14 +1593,14 @@ export default function App() {
                     </div>
                   ) : (
                     <>
-                      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 16, marginBottom: 24 }}>
+                      <div style={{ display: "grid", gridTemplateColumns: isMobile ? "repeat(2, 1fr)" : "repeat(auto-fit, minmax(200px, 1fr))", gap: isMobile ? 10 : 16, marginBottom: 24 }}>
                         {[
                           { label: "Members Lost to Competitors", value: String(lostCount), sub: "named another gym", accent: true },
                           { label: "Revenue at Risk to Competitors", value: `$${lostRev}/mo`, sub: `≈ $${(lostRev * 12).toLocaleString()}/yr`, accent: lostRev > 0 },
                           { label: "Members Who Shared Why", value: String(intel.total), sub: "via AI conversation", accent: false },
                         ].map((c, i) => (
-                          <div key={i} style={{ background: "#fff", borderRadius: 12, padding: "20px 22px", boxShadow: "0 1px 4px rgba(0,0,0,0.07)", borderTop: c.accent ? "3px solid #e74c3c" : "3px solid #1a1a2e" }}>
-                            <p style={{ margin: 0, fontSize: 26, fontWeight: 700, color: c.accent ? "#e74c3c" : "#1a1a2e" }}>{c.value}</p>
+                          <div key={i} style={{ background: "#fff", borderRadius: 12, padding: isMobile ? "14px 14px" : "20px 22px", boxShadow: "0 1px 4px rgba(0,0,0,0.07)", borderTop: c.accent ? "3px solid #e74c3c" : "3px solid #1a1a2e" }}>
+                            <p style={{ margin: 0, fontSize: isMobile ? 22 : 26, fontWeight: 700, color: c.accent ? "#e74c3c" : "#1a1a2e" }}>{c.value}</p>
                             <p style={{ margin: "3px 0 0", fontSize: 12, color: "#555" }}>{c.label}</p>
                             <p style={{ margin: "1px 0 0", fontSize: 11, color: "#aaa" }}>{c.sub}</p>
                           </div>
@@ -1776,7 +1801,7 @@ export default function App() {
 
         </div>
       )}
-    </Authenticator>
+    </AuthGate>
     </div>
     </ThemeProvider>
 
