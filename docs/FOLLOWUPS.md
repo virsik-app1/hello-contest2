@@ -18,7 +18,10 @@
   Twilio errors are retried on the next two runs, then marked `failed`.
 - Marking an outreach **Recovered** cancels that member's pending follow-up; the dashboard
   also shows the send time with a **Cancel** button.
-- Sample members (555 numbers) and the `/#demo` mode never schedule a real text.
+- Only members saved to the gym's roster (stable `m_…` / `mb-…` ids) with a real number get an
+  automatic text. The sample roster, 555 numbers and `/#demo` just get a local reminder.
+- A follow-up send records the phone→member route like a manual send, so a reply to it lands
+  on that member's thread in Outreach (and cancels nothing else).
 - **Per-gym time zone** (`settings#<gym>` item). Manual sends and follow-ups use it for the
   8am–9pm window. A gym with no saved zone gets the owner's browser zone on first sign-in;
   it can be changed on the Outreach tab. `QUIET_HOURS_TZ` remains the fallback.
@@ -42,8 +45,7 @@ New Lambda actions (all behind Cognito auth): `get_settings`, `save_settings {ti
 ## Known limits (v1)
 
 - The hourly run Scans the whole outreach table. Fine at beta size; add a GSI on `type`/`dueAt` later.
-- Follow-ups store the phone number at schedule time and key on the dashboard's member id. When
-  server-side members with stable ids land, the same key just carries the stable id.
+- Follow-ups store the phone number at schedule time; a later phone change on the roster isn't picked up.
 - The follow-up wording is a fixed friendly check-in (`defaultFollowUpText`); the owner can't edit it in the UI yet.
 - If the Lambda crashes mid-send an item can stay in `sending` and won't be retried (chosen over risking a double text).
 

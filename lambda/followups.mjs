@@ -105,7 +105,7 @@ export function memberRepliedSince(turns, sinceIso) {
 //   cancel(item, reason) (before claim), claim(item) → bool,
 //   release(item, fields) / finish(item, status, fields) (after claim),
 //   consumeQuota(tenantId) → bool, isFirstContact(phone), sendSMS(phone, text) → {sid},
-//   markContacted(phone), logSend(tenantId, phone, text, extra),
+//   markContacted(phone), rememberRecipient?(item, text), logSend(tenantId, phone, text, extra),
 //   quietStart, quietEnd, enforceQuietHours, optOutFooter, maxChars
 // }
 export async function processDueFollowups(items, now, deps) {
@@ -150,6 +150,7 @@ export async function processDueFollowups(items, now, deps) {
         continue;
       }
       await deps.markContacted(item.phone);
+      if (deps.rememberRecipient) await deps.rememberRecipient(item, outText); // replies file on this member
       await deps.logSend(item.tenantId, item.phone, outText, { sid: result?.sid, firstContact: first, followup: true, memberId: String(item.memberId) });
       await deps.finish(item, "sent", { sid: result?.sid || null, sentAt: new Date().toISOString(), sentText: outText });
       summary.sent++;

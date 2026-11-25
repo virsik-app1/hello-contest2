@@ -6,7 +6,7 @@
 import https from "https";
 import crypto from "crypto";
 import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
-import { DynamoDBDocumentClient, PutCommand, GetCommand, ScanCommand, UpdateCommand } from "@aws-sdk/lib-dynamodb";
+import { DynamoDBDocumentClient, PutCommand, GetCommand, ScanCommand, UpdateCommand, BatchWriteCommand } from "@aws-sdk/lib-dynamodb";
 import { SESClient, SendEmailCommand } from "@aws-sdk/client-ses";
 import { DEFAULT_TZ, isValidTimeZone, isQuietHoursIn, computeDueAt, clampFollowUpDays, defaultFollowUpText, followupKey, settingsKey, processDueFollowups } from "./followups.mjs";
 
@@ -62,6 +62,32 @@ async function callClaude(messages, model, maxTokens, system) {
     },
     payload
   );
+}
+
+// Turn an AI provider error into a sentence a gym owner can act on. The raw
+// provider message is kept at the end so nothing is hidden. Never includes the key.
+export function aiErrorMessage(status, body) {
+  const err = (body && body.error) || {};
+  const detail = typeof err.message === "string" ? err.message.slice(0, 200) : "";
+  const type = err.type || "";
+  const lower = detail.toLowerCase();
+  let reason;
+  if (status === 401 || type === "authentication_error") {
+    reason = "The AI key was rejected. Check ANTHROPIC_API_KEY in the Lambda settings.";
+  } else if (status === 403 || type === "permission_error") {
+    reason = "The AI key isn't allowed to use this model.";
+  } else if (lower.includes("credit balance")) {
+    reason = "The AI account is out of credit. Add credit at console.anthropic.com.";
+  } else if (status === 429 || type === "rate_limit_error") {
+    reason = "The AI is getting too many requests. Try again in a minute.";
+  } else if (status === 529 || type === "overloaded_error") {
+    reason = "The AI service is busy right now. Try again shortly.";
+  } else if (status >= 500) {
+    reason = "The AI service had a temporary problem. Try again shortly.";
+  } else {
+    reason = `The AI request failed (status ${status}).`;
+  }
+  return detail ? `${reason} (${detail})` : reason;
 }
 
 // ─── Send SMS via Twilio ──────────────────────────────────────────────────────
@@ -192,17 +218,119 @@ async function scanAllByTenant(TableName, tenantId) {
 }
 
 // ─── DynamoDB helpers ─────────────────────────────────────────────────────────
+// One item per member in pulseretain-members, key "<tenantId>#<memberId>".
+// The same item holds the member's roster profile ("profile") and their latest
+// churn analysis ("aiResult"), so updating one never wipes the other.
 async function saveMemberResult(tenantId, memberId, aiResult) {
-  await dynamo.send(new PutCommand({
+  await dynamo.send(new UpdateCommand({
     TableName: MEMBERS_TABLE,
-    Item: {
-      memberId: tKey(tenantId, memberId), // namespaced partition key
-      rawMemberId: String(memberId),      // the id the frontend uses
-      tenantId,
-      aiResult,
-      updatedAt: new Date().toISOString(),
+    Key: { memberId: tKey(tenantId, memberId) }, // namespaced partition key
+    UpdateExpression: "SET rawMemberId = :raw, tenantId = :t, aiResult = :ai, updatedAt = :now",
+    ExpressionAttributeValues: {
+      ":raw": String(memberId),                   // the id the frontend uses
+      ":t": tenantId,
+      ":ai": aiResult,
+      ":now": new Date().toISOString(),
     },
   }));
+}
+
+// ═══ MEMBER ROSTER — the gym's member list, saved server-side ══════════════════
+// Stable member ids are strings chosen by the client: "m_<uuid>" for CSV/manual
+// imports, "mb-<siteId>-<clientId>" for Mindbody sync. Small numeric ids (the
+// built-in sample roster, and legacy analyses saved before this existed) are
+// never stored as roster members, so they can't attach to the wrong person.
+const MEMBER_ID_RE   = /^(m_|mb-)[A-Za-z0-9_-]{1,80}$/;
+const MAX_ROSTER     = 5000;
+const STR_FIELDS     = ["name", "initials", "plan", "lastVisit", "usualVisits", "email", "phone", "location", "source", "externalId", "lastVisitDate"];
+const NUM_FIELDS     = ["score", "value", "joinedMonths", "missedPayments", "classesBooked"];
+const RISK_VALUES    = new Set(["high", "medium", "low"]);
+
+export function isStableMemberId(id) {
+  return typeof id === "string" && MEMBER_ID_RE.test(id);
+}
+
+// Whitelist and bound a member profile from the browser (or a sync job).
+export function cleanMemberProfile(m) {
+  if (!m || !isStableMemberId(m.id)) return null;
+  const name = typeof m.name === "string" ? m.name.trim().slice(0, 120) : "";
+  if (!name) return null;
+  const p = { id: m.id, name };
+  for (const f of STR_FIELDS) {
+    if (f === "name") continue;
+    if (m[f] != null && m[f] !== "") p[f] = String(m[f]).slice(0, 200);
+  }
+  for (const f of NUM_FIELDS) {
+    const n = Number(m[f]);
+    if (Number.isFinite(n)) p[f] = n;
+  }
+  p.risk = RISK_VALUES.has(m.risk) ? m.risk : "low";
+  return p;
+}
+
+async function batchWriteAll(requests) {
+  for (let i = 0; i < requests.length; i += 25) {
+    let pending = { [MEMBERS_TABLE]: requests.slice(i, i + 25) };
+    for (let attempt = 0; attempt < 5 && pending[MEMBERS_TABLE]?.length; attempt++) {
+      if (attempt) await new Promise(r => setTimeout(r, 100 * 2 ** attempt));
+      const res = await dynamo.send(new BatchWriteCommand({ RequestItems: pending }));
+      pending = res.UnprocessedItems || {};
+    }
+    if (pending[MEMBERS_TABLE]?.length) throw new Error("Couldn't save every member — please try again.");
+  }
+}
+
+// Insert or update members' profiles. Keeps each member's saved aiResult.
+// (Exported so the Mindbody sync can reuse it.)
+export async function upsertMembers(tenantId, members) {
+  const now = new Date().toISOString();
+  const clean = members.map(cleanMemberProfile).filter(Boolean);
+  // UpdateCommand (not Put) so a re-import or re-sync doesn't drop analyses.
+  // Run in small parallel chunks to stay well inside Lambda time limits.
+  const base = Date.now() * 1000; // room for 1,000 members per millisecond (stays below 2^53)
+  for (let i = 0; i < clean.length; i += 25) {
+    await Promise.all(clean.slice(i, i + 25).map((p, j) => dynamo.send(new UpdateCommand({
+      TableName: MEMBERS_TABLE,
+      Key: { memberId: tKey(tenantId, p.id) },
+      UpdateExpression: "SET rawMemberId = :raw, tenantId = :t, profile = :p, sortOrder = if_not_exists(sortOrder, :o), updatedAt = :now",
+      ExpressionAttributeValues: { ":raw": p.id, ":t": tenantId, ":p": p, ":o": base + i + j, ":now": now },
+    }))));
+  }
+  return clean.length;
+}
+
+// Replace the imported roster: delete this gym's member items (including
+// legacy analyses keyed 1, 2, 3…), then write the new list in import order.
+// Mindbody-synced members ("mb-" ids) are owned by the sync and kept.
+async function replaceRoster(tenantId, members) {
+  const existing = (await scanAllByTenant(MEMBERS_TABLE, tenantId))
+    .filter(i => !String(i.rawMemberId ?? "").startsWith("mb-"));
+  await batchWriteAll(existing.map(i => ({ DeleteRequest: { Key: { memberId: i.memberId } } })));
+  const now = new Date().toISOString();
+  const base = Date.now() * 1000; // same ordering scale as upsertMembers
+  const clean = members.map(cleanMemberProfile).filter(Boolean);
+  await batchWriteAll(clean.map((p, idx) => ({
+    PutRequest: { Item: { memberId: tKey(tenantId, p.id), rawMemberId: p.id, tenantId, profile: p, sortOrder: base + idx, updatedAt: now } },
+  })));
+  return clean.length;
+}
+
+async function deleteMembers(tenantId, ids) {
+  const keys = ids.filter(isStableMemberId).map(id => ({ DeleteRequest: { Key: { memberId: tKey(tenantId, id) } } }));
+  await batchWriteAll(keys);
+  return keys.length;
+}
+
+// Saved roster (in import order) plus analyses for those members only.
+async function loadRoster(tenantId) {
+  const items = await scanAllByTenant(MEMBERS_TABLE, tenantId);
+  const rows = items
+    .filter(i => i.profile && isStableMemberId(i.rawMemberId))
+    .sort((a, b) => (a.sortOrder || 0) - (b.sortOrder || 0));
+  return {
+    members: rows.map(i => i.profile),
+    memberResults: rows.filter(i => i.aiResult).map(i => ({ memberId: i.rawMemberId, aiResult: i.aiResult })),
+  };
 }
 
 // NOTE: the pulseretain-outreach table's partition key is "logID" (capital ID),
@@ -222,12 +350,6 @@ async function saveOutreachLog(tenantId, log) {
       savedAt: new Date().toISOString(),
     },
   }));
-}
-
-async function loadAllMemberResults(tenantId) {
-  const items = await scanAllByTenant(MEMBERS_TABLE, tenantId);
-  // Expose the raw memberId the frontend expects, not the namespaced key.
-  return items.map(i => ({ ...i, memberId: i.rawMemberId ?? i.memberId }));
 }
 
 async function loadAllOutreachLogs(tenantId) {
@@ -592,7 +714,125 @@ async function handleTwilioInbound(event) {
   if (from && OPTOUT_WORDS.has(kw)) { await setOptOut(from,   { source: "inbound_sms" }); return twiml(""); } // Twilio's default reply confirms
   if (from && OPTIN_WORDS.has(kw))  { await clearOptOut(from, { source: "inbound_sms" }); return twiml("You're re-subscribed. Reply STOP to opt out anytime."); }
   if (HELP_WORDS.has(kw))           { return twiml(HELP_REPLY); }
-  return twiml(""); // ordinary replies: acknowledge 200 (owner-side capture is a later feature)
+  // Ordinary replies: save to the member's thread and pre-draft an answer for
+  // the owner to approve in the Outreach tab. Nothing is ever auto-sent back.
+  if (from) await captureInboundReply(from, params.Body, params.MessageSid);
+  return twiml("");
+}
+
+// ═══ INBOUND REPLY CAPTURE ════════════════════════════════════════════════════
+// Twilio only tells us the sender's phone. Every successful send_sms records
+// which gym + member that phone belongs to ("route#<phone>"), so a reply can be
+// filed on the right member's thread. With one shared Twilio number, the gym
+// that texted the number most recently owns the reply. (Per-gym numbers later
+// make this exact.)
+const routeKey = (phone) => `route#${phone}`;
+const INBOUND_DRAFT_TIMEOUT_MS = Number(process.env.INBOUND_DRAFT_TIMEOUT_MS) || 8000; // Twilio gives up at 15s
+
+// Only the profile fields the reply agent reads (see buildReplyUserMessage).
+export function memberSnapshot(m = {}) {
+  return {
+    name: clean(m.name, 80), plan: clean(m.plan, 60), value: Number(m.value) || 0,
+    joinedMonths: clean(m.joinedMonths, 12), usualVisits: clean(m.usualVisits, 60), lastVisit: clean(m.lastVisit, 40),
+  };
+}
+
+async function rememberRecipient(phone, tenantId, memberId, member, text) {
+  if (!memberId) return; // older frontend: no member attached, nothing to route to
+  try {
+    await dynamo.send(new PutCommand({ TableName: OUTREACH_TABLE, Item: {
+      logID: routeKey(phone), type: "route", phone, tenantId, memberId: String(memberId),
+      member: memberSnapshot(member), lastText: String(text).slice(0, 500), at: new Date().toISOString(),
+    } }));
+  } catch (e) { console.warn("rememberRecipient failed:", e.message); }
+}
+
+// Pure: add an inbound SMS to a thread. Seeds the thread with the gym's last
+// text so the agent knows what the member is answering, and ignores Twilio
+// retries of the same MessageSid. Returns null when nothing changed.
+export function appendInboundTurn(turns, { text, sid, from, at, seedText }) {
+  const t = Array.isArray(turns) ? [...turns] : [];
+  if (sid && t.some(x => x.sid === sid)) return null;
+  if (t.length === 0 && seedText) t.push({ role: "studio", text: String(seedText).slice(0, 500), at });
+  t.push({ role: "member", text, at, via: "sms", from, ...(sid ? { sid } : {}) });
+  return t;
+}
+
+// Pure: summarize one conversation item for the owner's reply inbox.
+export function inboxEntry(item) {
+  const turns = Array.isArray(item.turns) ? item.turns : [];
+  const smsTurns = turns.filter(t => t.role === "member" && t.via === "sms");
+  if (smsTurns.length === 0) return null; // only threads with a real texted reply
+  const lastMember = [...turns].reverse().find(t => t.role === "member");
+  const last = turns[turns.length - 1];
+  const handled = item.handledAt && lastMember && item.handledAt >= lastMember.at;
+  const draft = item.pendingDraft && lastMember && item.pendingDraft.forAt === lastMember.at ? item.pendingDraft : null;
+  return {
+    memberId: String(item.memberId), memberName: item.memberName || "",
+    phone: smsTurns[smsTurns.length - 1].from || null,
+    member: item.member || null,
+    needsReply: !!(last && last.role === "member" && !handled),
+    lastMemberAt: lastMember?.at || null,
+    turns: turns.slice(-12),
+    draft,
+  };
+}
+
+function withTimeout(promise, ms) {
+  let timer;
+  return Promise.race([promise, new Promise((_, rej) => { timer = setTimeout(() => rej(new Error("timeout")), ms); })])
+    .finally(() => clearTimeout(timer));
+}
+
+async function captureInboundReply(phone, body, sid) {
+  const text = String(body ?? "").trim().slice(0, 1000);
+  if (!text) return;
+  const at = new Date().toISOString();
+  let route = null;
+  try {
+    route = (await dynamo.send(new GetCommand({ TableName: OUTREACH_TABLE, Key: { logID: routeKey(phone) } }))).Item || null;
+  } catch (e) { console.warn("route lookup failed:", e.message); }
+  if (!route) {
+    // No gym has texted this number through PulseRetain — keep it for audit
+    // rather than silently dropping it.
+    await dynamo.send(new PutCommand({ TableName: OUTREACH_TABLE, Item: {
+      logID: `inbound#${phone}#${at}`, type: "inbound_unmatched", phone, text, sid: sid || null, at } }));
+    console.warn("inbound reply from unknown number — stored as inbound_unmatched");
+    return;
+  }
+  const { tenantId, memberId } = route;
+  const member = { ...memberSnapshot(route.member), name: route.member?.name || "Member" };
+  const convItem = await loadConversationItem(tenantId, memberId);
+  const turns = appendInboundTurn(convItem?.turns, { text, sid, from: phone, at, seedText: route.lastText });
+  if (!turns) return; // Twilio retry of a message we already saved
+  const meta = { intel: convItem?.intel || null, memberValue: member.value, member };
+  // Save first — the member's words are kept even if drafting fails below.
+  await saveConversation(tenantId, memberId, member.name, turns, meta);
+
+  // Draft the gym's answer now so it's waiting when the owner opens the app.
+  // Best-effort: on quota, timeout or a bad model response the owner can still
+  // press "Draft reply" in the Outreach tab.
+  try {
+    if (!process.env.ANTHROPIC_API_KEY) return;
+    if (!(await consumeQuota(tenantId, "ai", DAILY_AI_LIMIT))) return;
+    const response = await withTimeout(callClaude(
+      [{ role: "user", content: buildReplyUserMessage(member, turns) }],
+      REPLY_MODEL, REPLY_MAX_TOKENS, buildReplySystemPrompt()
+    ), INBOUND_DRAFT_TIMEOUT_MS);
+    if (response.statusCode >= 400) {
+      let body = {};
+      try { body = JSON.parse(response.body); } catch { /* non-JSON */ }
+      throw new Error(aiErrorMessage(response.statusCode, body));
+    }
+    const data = JSON.parse(response.body);
+    const draft = parseDraftJson((data.content || []).filter(b => b.type === "text").map(b => b.text).join("").trim());
+    const intel = (draft.departureReason !== "none" || draft.competitor)
+      ? { departureReason: draft.departureReason, competitor: draft.competitor || null, at }
+      : meta.intel;
+    await saveConversation(tenantId, memberId, member.name, turns, { ...meta, intel, pendingDraft: { ...draft, forAt: at } });
+  } catch (e) {
+    console.warn("inbound auto-draft skipped:", e.message);
+  }
 }
 
 // ═══ GYM SETTINGS + SCHEDULED FOLLOW-UPS ══════════════════════════════════════
@@ -628,7 +868,7 @@ async function saveGymTimeZone(tenantId, timezone) {
   tzCache.set(tenantId, { tz: timezone, at: Date.now() });
 }
 
-async function scheduleFollowup(tenantId, { memberId, memberName, phone, message, followUpDays }) {
+async function scheduleFollowup(tenantId, { memberId, memberName, member, phone, message, followUpDays }) {
   const tz    = await getGymTimeZone(tenantId);
   const now   = new Date();
   const days  = clampFollowUpDays(followUpDays);
@@ -636,6 +876,7 @@ async function scheduleFollowup(tenantId, { memberId, memberName, phone, message
     logID: followupKey(tenantId, memberId),
     type: "followup", status: "scheduled", tenantId,
     memberId: String(memberId), memberName: String(memberName || "").slice(0, 100), phone,
+    member: memberSnapshot({ ...(member || {}), name: memberName }), // so a reply to the follow-up files on this member
     message: String(message || defaultFollowUpText(memberName)).slice(0, SMS_MAX_CHARS),
     followUpDays: days, timezone: tz,
     scheduledAt: now.toISOString(), dueAt: computeDueAt(now, days, tz).toISOString(), attempts: 0,
@@ -710,6 +951,7 @@ async function runScheduledFollowups(now = new Date()) {
     finish:  (item, status, fields) => update(item, { ...fields, status }, "sending"),
     consumeQuota: (tenantId) => consumeQuota(tenantId, "sms", DAILY_SMS_LIMIT),
     isFirstContact, sendSMS, markContacted, logSend,
+    rememberRecipient: (item, text) => rememberRecipient(item.phone, item.tenantId, item.memberId, item.member || { name: item.memberName }, text),
     quietStart: QUIET_START, quietEnd: QUIET_END, enforceQuietHours: ENFORCE_QUIET_HOURS,
     optOutFooter: OPTOUT_FOOTER, maxChars: SMS_MAX_CHARS,
   });
@@ -795,10 +1037,17 @@ export const handler = async (event) => {
         ANALYZE_MODEL,
         Math.min(Number(body.max_tokens) || 400, ANALYZE_MAX_TOKENS)
       );
-      const claudeData = JSON.parse(response.body);
+      let claudeData;
+      try { claudeData = JSON.parse(response.body); } catch { claudeData = {}; }
+      if (response.statusCode >= 400 || !Array.isArray(claudeData.content)) {
+        const error = aiErrorMessage(response.statusCode, claudeData);
+        console.warn("analyze: AI request failed:", response.statusCode, error);
+        return { statusCode: 502, headers: { ...CORS, "Content-Type": "application/json" }, body: JSON.stringify({ error }) };
+      }
 
-      // Parse and save the AI result to DynamoDB
-      if (body.memberId && claudeData.content) {
+      // Parse and save the AI result to DynamoDB — only for members with a
+      // stable id, so sample-roster (1, 2, 3…) analyses never get stored.
+      if (isStableMemberId(body.memberId) && claudeData.content) {
         const raw   = claudeData.content.filter(b => b.type === "text").map(b => b.text).join("").trim();
         const match = raw.match(/\{[\s\S]*\}/);
         if (match) {
@@ -842,6 +1091,7 @@ export const handler = async (event) => {
 
       const result = await sendSMS(phone, outText);
       await markContacted(phone);
+      await rememberRecipient(phone, tenantId, body.memberId, body.member, outText); // so replies find this member
       await logSend(tenantId, phone, outText, { sid: result.sid, firstContact: first });
       return {
         statusCode: 200,
@@ -939,7 +1189,8 @@ export const handler = async (event) => {
       let claudeData;
       try { claudeData = JSON.parse(response.body); } catch { claudeData = {}; }
       if (response.statusCode >= 400 || !Array.isArray(claudeData.content)) {
-        const msg = claudeData.error?.message || "AI request failed";
+        const msg = aiErrorMessage(response.statusCode, claudeData);
+        console.warn("draft_reply: AI request failed:", response.statusCode, msg);
         return { statusCode: 502, headers: CORS, body: JSON.stringify({ error: msg, turns }) };
       }
       const raw = claudeData.content.filter(b => b.type === "text").map(b => b.text).join("").trim();
@@ -1018,14 +1269,41 @@ export const handler = async (event) => {
       if (!memberId || !text) {
         return { statusCode: 400, headers: CORS, body: JSON.stringify({ error: "Missing memberId or text" }) };
       }
-      const turns = await getConversation(tenantId, memberId);
+      const ci = await loadConversationItem(tenantId, memberId);
+      const turns = (ci && Array.isArray(ci.turns)) ? ci.turns : [];
       turns.push({ role: "studio", text: String(text).slice(0, 500), at: new Date().toISOString() });
-      await saveConversation(tenantId, memberId, memberName, turns);
+      // Keep the thread's intel/profile (a bare save used to wipe them).
+      await saveConversation(tenantId, memberId, memberName, turns,
+        { intel: ci?.intel || null, memberValue: ci?.memberValue || 0, ...(ci?.member ? { member: ci.member } : {}) });
       return {
         statusCode: 200,
         headers: { ...CORS, "Content-Type": "application/json" },
         body: JSON.stringify({ success: true, turns }),
       };
+    }
+
+    // ── Route: "get_inbox" — texted member replies, newest first ────────────
+    if (body.action === "get_inbox") {
+      const items = await scanAllByTenant(OUTREACH_TABLE, tenantId);
+      const threads = items
+        .filter(i => i.type === "conversation")
+        .map(inboxEntry)
+        .filter(Boolean)
+        .sort((a, b) => String(b.lastMemberAt).localeCompare(String(a.lastMemberAt)));
+      return {
+        statusCode: 200,
+        headers: { ...CORS, "Content-Type": "application/json" },
+        body: JSON.stringify({ threads }),
+      };
+    }
+
+    // ── Route: "mark_reply_handled" — owner dealt with it outside the app ───
+    if (body.action === "mark_reply_handled") {
+      if (!body.memberId) return { statusCode: 400, headers: CORS, body: JSON.stringify({ error: "Missing memberId" }) };
+      const ci = await loadConversationItem(tenantId, body.memberId);
+      if (!ci) return { statusCode: 404, headers: CORS, body: JSON.stringify({ error: "Conversation not found" }) };
+      await dynamo.send(new PutCommand({ TableName: OUTREACH_TABLE, Item: { ...ci, handledAt: new Date().toISOString() } }));
+      return { statusCode: 200, headers: { ...CORS, "Content-Type": "application/json" }, body: JSON.stringify({ success: true }) };
     }
 
     // (submit_lead is handled earlier as a public route, before the auth gate.)
@@ -1044,7 +1322,9 @@ export const handler = async (event) => {
     // ── Routes: scheduled follow-ups (sent later by the hourly run) ─────────
     if (body.action === "schedule_followup") {
       const phone = toE164(body.phone);
-      if (!body.memberId || !phone) return { statusCode: 400, headers: CORS, body: JSON.stringify({ error: "Missing memberId or a valid phone" }) };
+      if (!phone) return { statusCode: 400, headers: CORS, body: JSON.stringify({ error: "Missing a valid phone number" }) };
+      // Only saved roster members (stable ids) — never the built-in sample roster.
+      if (!isStableMemberId(body.memberId)) return { statusCode: 400, headers: CORS, body: JSON.stringify({ error: "Follow-ups can only be scheduled for members saved to your roster." }) };
       if (body.message && String(body.message).length > SMS_MAX_CHARS) return { statusCode: 400, headers: CORS, body: JSON.stringify({ error: `Message too long (max ${SMS_MAX_CHARS} characters)` }) };
       if (await isOptedOut(phone)) {
         return { statusCode: 403, headers: { ...CORS, "Content-Type": "application/json" },
@@ -1062,16 +1342,43 @@ export const handler = async (event) => {
       return { statusCode: 200, headers: { ...CORS, "Content-Type": "application/json" }, body: JSON.stringify({ followups: await listFollowups(tenantId) }) };
     }
 
+    // ── Route: "save_members" — persist the roster ────────────────────────────
+    // mode "replace" (CSV import / sample gym): the list becomes the roster.
+    // mode "upsert" (add one member): add or update these members only.
+    if (body.action === "save_members") {
+      const list = Array.isArray(body.members) ? body.members : null;
+      const mode = body.mode === "upsert" ? "upsert" : "replace";
+      if (!list || list.length > MAX_ROSTER) {
+        return { statusCode: 400, headers: CORS, body: JSON.stringify({ error: `Send between 0 and ${MAX_ROSTER} members.` }) };
+      }
+      const saved = mode === "upsert" ? await upsertMembers(tenantId, list) : await replaceRoster(tenantId, list);
+      return { statusCode: 200, headers: { ...CORS, "Content-Type": "application/json" }, body: JSON.stringify({ success: true, saved, skipped: list.length - saved }) };
+    }
+
+    // ── Route: "delete_members" — remove members (or all, to go back to demo) ─
+    if (body.action === "delete_members") {
+      let removed;
+      if (body.all === true) {
+        const existing = await scanAllByTenant(MEMBERS_TABLE, tenantId);
+        await batchWriteAll(existing.map(i => ({ DeleteRequest: { Key: { memberId: i.memberId } } })));
+        removed = existing.length;
+      } else {
+        removed = await deleteMembers(tenantId, Array.isArray(body.ids) ? body.ids : []);
+      }
+      return { statusCode: 200, headers: { ...CORS, "Content-Type": "application/json" }, body: JSON.stringify({ success: true, removed }) };
+    }
+
     // ── Route: "load_data" — fetch all saved data on page load ───────────────
     if (body.action === "load_data") {
-      const [memberResults, outreachLogs] = await Promise.all([
-        loadAllMemberResults(tenantId),
+      const [roster, outreachLogs] = await Promise.all([
+        loadRoster(tenantId),
         loadAllOutreachLogs(tenantId),
       ]);
       return {
         statusCode: 200,
         headers: { ...CORS, "Content-Type": "application/json" },
-        body: JSON.stringify({ memberResults, outreachLogs }),
+        // rosterSaved tells the app this Lambda version stores rosters at all.
+        body: JSON.stringify({ members: roster.members, memberResults: roster.memberResults, outreachLogs, rosterSaved: true }),
       };
     }
 

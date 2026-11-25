@@ -61,3 +61,15 @@ Threads persist in the existing `pulseretain-outreach` DynamoDB table as items w
 3. The agent reads the thread, drafts: empathy + offer to **pause** instead of cancel (not a discount war), flags `nextStep` for the owner.
 4. Owner taps **Send**. Sarah replies *"ok yeah maybe pausing is smart"* → next draft confirms the pause warmly, `suggestedOffer: none` — **it knows not to keep selling.**
 5. Line for the judges: *"Every tool on the market predicts who will leave. Ours has the conversation that keeps them."*
+
+## Automatic reply capture (Twilio webhook)
+
+Members no longer need to be pasted in by hand. When a member texts back:
+
+1. Every successful `send_sms` now also records `route#<phone>` → `{ tenantId, memberId, member profile, lastText }` in the outreach table. The frontend sends `memberId` and a small `member` profile with each text.
+2. The signed Twilio webhook keeps handling STOP/START/HELP first. Any other text is looked up by phone, appended to that member's `conv-<memberId>` thread (`via: "sms"`, deduped by Twilio `MessageSid`), and saved **before** any AI call.
+3. Claude then pre-drafts the gym's answer (same server-side prompt and `parseDraftJson` guardrails as `draft_reply`), stored as `pendingDraft` on the thread. It is best-effort: on quota, an 8s timeout (`INBOUND_DRAFT_TIMEOUT_MS`) or a bad response, the owner just presses "Draft with Claude".
+4. Nothing is ever texted back automatically. The Outreach tab's **Member replies** section (`get_inbox`) shows each waiting reply with the editable draft: **Approve & Send**, **Log only**, **Redraft**, or **Mark handled** (`mark_reply_handled`).
+5. Texts from numbers no gym has texted through PulseRetain are kept as `inbound_unmatched` items for audit instead of being dropped.
+
+Known limits: with one shared Twilio number, the gym that texted a phone most recently owns its replies. Texts sent before this change have no `route#` record, so replies to them land in `inbound_unmatched`.
