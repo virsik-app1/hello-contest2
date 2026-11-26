@@ -44,26 +44,16 @@ New file `lambda/security.mjs` must be deployed beside `index.mjs` and
 
 ## AWS changes for Carter's approval
 
-None of these have been made. Each is reversible.
+Live setup checked read-only on Nov 26, 2026. None of these changes have been
+made. Each one can be undone.
 
-1. **DynamoDB point-in-time recovery** on `pulseretain-members`,
-   `pulseretain-outreach` and `pulseretain-leads` (35 days of restore points;
-   costs cents at current size). Also turn on **deletion protection**.
-2. **CloudWatch alarms** emailing Carter through one SNS topic:
-   Lambda `Errors` ≥ 5 in 5 min; Lambda `Throttles` ≥ 1; `PulseRetain/ServerError` ≥ 5 in 5 min;
-   `PulseRetain/FollowupRunFailed` ≥ 1; `PulseRetain/GlobalQuotaExceeded` ≥ 1;
-   `PulseRetain/TwilioSignatureInvalid` ≥ 20 in 1 hour; `PulseRetain/AIRequestFailed` ≥ 10 in 15 min.
-3. **Reserved concurrency** of 20 on `pulseretain-claude-proxy`, a hard ceiling
-   on parallel runs (and cost) if the public URL is flooded.
-4. **Least-privilege IAM.** Replace `AmazonDynamoDBFullAccess` and
-   `AmazonSESFullAccess` on the Lambda role with a policy allowing only
-   Get/Put/Update/Delete/Scan/BatchWrite on the three tables and SendEmail
-   from the notify address.
-5. **DynamoDB TTL** on `pulseretain-outreach`, attribute `expiresAt`, so old
-   rate/usage counters clean themselves up.
-6. **Log retention** of 90 days on `/aws/lambda/pulseretain-claude-proxy`
-   (default is keep forever).
-7. **Secrets** (later, optional): move `ANTHROPIC_API_KEY`, `TWILIO_AUTH_TOKEN`
-   and Stripe keys from plain environment variables to Secrets Manager.
-8. **Cognito**: confirm self-sign-up is intended; consider MFA for owners and
-   a stronger password policy.
+| # | Priority | Live today | Proposed change |
+|---|----------|------------|-----------------|
+| 1 | High | Point-in-time recovery **off** on all three tables, deletion protection **off**, no AWS Backup plan. 46 members, 38 outreach items, 2 leads. | Turn on point-in-time recovery (35 days of restore points, costs cents at this size) and deletion protection on `pulseretain-members`, `pulseretain-outreach`, `pulseretain-leads`. |
+| 2 | High | Only two billing alarms ($1, $5). **Nothing watches the app itself.** | Alarms emailed through the existing `billing-alerts` SNS topic: Lambda `Errors` ≥ 5 in 5 min; Lambda `Throttles` ≥ 1; `PulseRetain/ServerError` ≥ 5 in 5 min; `PulseRetain/FollowupRunFailed` ≥ 1; `PulseRetain/GlobalQuotaExceeded` ≥ 1; `PulseRetain/TwilioSignatureInvalid` ≥ 20 in 1 hour; `PulseRetain/AIRequestFailed` ≥ 10 in 15 min. The `PulseRetain/*` ones start reporting once PR 8 is deployed. |
+| 3 | Medium | No reserved concurrency; Function URL is public (auth type NONE, by design). | Reserved concurrency of 20: a hard cap on parallel runs and cost if the URL is flooded. |
+| 4 | Medium | Lambda role has `AmazonDynamoDBFullAccess` and `AmazonSESFullAccess` (every table and every SES action in the account). | Replace with one policy allowing only Get/Put/Update/Delete/Scan/BatchWrite on the three tables and `ses:SendEmail` from the notify address. |
+| 5 | Medium | Cognito: **anyone can sign up** (8 users now), MFA off. Password policy is good (8+ chars, mixed case, number, symbol); deletion protection on. | Decide whether sign-up should stay open until Stripe billing is live. Turn MFA to "optional" (authenticator app) so owners can protect their accounts. |
+| 6 | Low | Log group keeps logs forever (about 0.5 MB today). | 90-day retention on `/aws/lambda/pulseretain-claude-proxy`. |
+| 7 | Low | TTL off on `pulseretain-outreach`. | TTL on attribute `expiresAt`, so rate and usage counters clean themselves up. |
+| 8 | Low | Keys are plain Lambda environment variables; no Secrets Manager secrets. Leftover `SMS_ALLOWLIST` variable is no longer read by the code. | Later: move `ANTHROPIC_API_KEY`, `TWILIO_AUTH_TOKEN` and Stripe keys to Secrets Manager. Remove `SMS_ALLOWLIST`. |
