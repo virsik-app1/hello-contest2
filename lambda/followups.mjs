@@ -101,11 +101,11 @@ export function memberRepliedSince(turns, sinceIso) {
 // so two overlapping runs can never text a member twice.
 //
 // deps: {
-//   getTimeZone(tenantId) → tz, isOptedOut(phone), getConversationTurns(tenantId, memberId),
+//   getTimeZone(tenantId) → tz, isOptedOut(phone, tenantId), getConversationTurns(tenantId, memberId),
 //   cancel(item, reason) (before claim), claim(item) → bool,
 //   release(item, fields) / finish(item, status, fields) (after claim),
-//   consumeQuota(tenantId) → bool, isFirstContact(phone), sendSMS(phone, text) → {sid},
-//   markContacted(phone), rememberRecipient?(item, text), logSend(tenantId, phone, text, extra),
+//   consumeQuota(tenantId) → bool, isFirstContact(phone, tenantId), sendSMS(phone, text, tenantId) → {sid},
+//   markContacted(phone, tenantId), rememberRecipient?(item, text), logSend(tenantId, phone, text, extra),
 //   quietStart, quietEnd, enforceQuietHours, optOutFooter, maxChars
 // }
 export async function processDueFollowups(items, now, deps) {
@@ -117,7 +117,7 @@ export async function processDueFollowups(items, now, deps) {
     try {
       const tz = await deps.getTimeZone(item.tenantId);
 
-      if (await deps.isOptedOut(item.phone)) {
+      if (await deps.isOptedOut(item.phone, item.tenantId)) {
         await deps.cancel(item, "opted_out"); summary.cancelled++; continue;
       }
       const turns = await deps.getConversationTurns(item.tenantId, item.memberId);
@@ -135,21 +135,21 @@ export async function processDueFollowups(items, now, deps) {
       }
 
       let outText = String(item.message);
-      const first = await deps.isFirstContact(item.phone);
+      const first = await deps.isFirstContact(item.phone, item.tenantId);
       if (first && !/\bstop\b/i.test(outText) && outText.length + 1 + deps.optOutFooter.length <= deps.maxChars) {
         outText = `${outText} ${deps.optOutFooter}`;
       }
 
       let result;
       try {
-        result = await deps.sendSMS(item.phone, outText);
+        result = await deps.sendSMS(item.phone, outText, item.tenantId);
       } catch (e) {
         const attempts = (Number(item.attempts) || 0) + 1;
         if (attempts >= MAX_SEND_ATTEMPTS) { await deps.finish(item, "failed", { attempts, lastError: String(e.message || e).slice(0, 300) }); summary.failed++; }
         else { await deps.release(item, { attempts, lastError: String(e.message || e).slice(0, 300) }); summary.deferred++; }
         continue;
       }
-      await deps.markContacted(item.phone);
+      await deps.markContacted(item.phone, item.tenantId);
       if (deps.rememberRecipient) await deps.rememberRecipient(item, outText); // replies file on this member
       await deps.logSend(item.tenantId, item.phone, outText, { sid: result?.sid, firstContact: first, followup: true, memberId: String(item.memberId) });
       await deps.finish(item, "sent", { sid: result?.sid || null, sentAt: new Date().toISOString(), sentText: outText });
