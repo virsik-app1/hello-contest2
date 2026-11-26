@@ -5,6 +5,8 @@ Plain static site (HTML, CSS, a little JavaScript). No build step, no dependenci
 | File | What it is |
 |------|------------|
 | `index.html` | The page: hero, churn calculator, how it works, features, pricing, demo form, FAQ |
+
+Free-trial buttons go to the app's sign-up screen (`/?signup`); "Book a demo" and "Talk to us" go to the demo form.
 | `styles.css` | Styles, same navy/red/purple/orange palette as the app |
 | `roi.js` | Calculator math (pure functions, shared by the page and the tests) |
 | `site.js` | Wires up the calculator and posts the demo form |
