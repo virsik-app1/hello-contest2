@@ -33,12 +33,21 @@ A gym with no roster and no activity that week gets no email.
 SES is already in the stack (demo-request emails) and the Lambda role already has
 `AmazonSESFullAccess`, so no new service or IAM change is needed.
 
+## Current SES state (checked 2026-11-26, read-only)
+
+- **Still in the SES sandbox** (production access not enabled; 200 emails/day, 1/second). A production-access request was filed earlier (case 178132132500991) describing only Cognito codes and demo-form alerts, not customer reports.
+- **One verified identity:** Carter's Gmail address (also the Lambda's `NOTIFY_EMAIL`). No verified domain.
+- `REPORT_FROM_EMAIL` is not set, so reports would go out from that Gmail address (the fallback).
+- Only the hourly follow-up EventBridge rule exists; no weekly rule yet.
+
+What that means: once deployed, Carter can test the report on himself right away (sandbox allows verified-to-verified). Real owners won't receive it until production access is granted, and sending *from* a Gmail address through SES fails Gmail's own sender checks, so it will often land in spam. A verified domain fixes that.
+
 ## Setup steps (Carter, once)
 
 1. **Verify a sender.** SES console (us-east-1) → Identities → Create identity.
    - Best: **Domain** (e.g. `pulseretain.com`), then add the 3 DKIM CNAME records it shows to your DNS. Mail then comes from any address at that domain, e.g. `reports@pulseretain.com`.
    - Quick start: **Email address**, click the link SES emails you.
-2. **Leave the sandbox.** A new SES account can only email *verified* addresses (fine for testing with your own). SES → Account dashboard → **Request production access**: use case "transactional: weekly account reports to our own signed-in customers", about 1 email per customer per week. Usually approved in about a day.
+2. **Leave the sandbox.** The account can currently only email *verified* addresses (fine for testing with your own). SES → Account dashboard → **Request production access** (or reply on the existing case 178132132500991) and add the weekly report to the use case: "transactional: one weekly account report to each signed-in customer, about 1 email per customer per week, with an off switch in the app". Usually answered in about a day.
 3. **Lambda environment variables** (Configuration → Environment variables):
    - `REPORT_FROM_EMAIL` = the verified address, e.g. `reports@pulseretain.com` (falls back to `NOTIFY_EMAIL` if unset)
    - `DASHBOARD_URL` (optional) = the app link in the email; defaults to `https://main.d2yk3ai4m6puu9.amplifyapp.com`
