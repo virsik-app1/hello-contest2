@@ -8,6 +8,7 @@ import crypto from "crypto";
 import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
 import { DynamoDBDocumentClient, PutCommand, GetCommand, ScanCommand, UpdateCommand, BatchWriteCommand } from "@aws-sdk/lib-dynamodb";
 import { SESClient, SendEmailCommand } from "@aws-sdk/client-ses";
+import { isAllowedSmsDestination, cleanLead, cleanOutreachLog, isSafeMemberId, OUTREACH_STATUSES, windowKey, clientIp, safeErrorMessage, emitMetric } from "./security.mjs";
 import { DEFAULT_TZ, isValidTimeZone, isQuietHoursIn, computeDueAt, clampFollowUpDays, defaultFollowUpText, followupKey, settingsKey, processDueFollowups } from "./followups.mjs";
 
 // ─── DynamoDB setup ───────────────────────────────────────────────────────────
@@ -337,9 +338,10 @@ async function loadRoster(tenantId) {
 // not "logId". The original code used "logId" everywhere, so outreach logs never
 // actually persisted. We write the key as "logID" and expose "logId" to the
 // frontend on read (see loadAllOutreachLogs) so nothing else has to change.
-async function saveOutreachLog(tenantId, log) {
-  const rawId = String(log?.id ?? "");
-  if (!rawId || rawId.startsWith("conv-")) throw new Error("Invalid outreach log id");
+async function saveOutreachLog(tenantId, rawLog) {
+  const log = cleanOutreachLog(rawLog); // whitelisted, size-bounded fields only
+  if (!log) return false;
+  const rawId = String(log.id);
   await dynamo.send(new PutCommand({
     TableName: OUTREACH_TABLE,
     Item: {
@@ -350,6 +352,7 @@ async function saveOutreachLog(tenantId, log) {
       savedAt: new Date().toISOString(),
     },
   }));
+  return true;
 }
 
 async function loadAllOutreachLogs(tenantId) {
@@ -369,11 +372,12 @@ async function updateOutreachStatus(tenantId, logId, status) {
     TableName: OUTREACH_TABLE,
     Key: { logID: tKey(tenantId, logId) },
   }));
-  if (!existing.Item) throw new Error("Log not found");
+  if (!existing.Item || existing.Item.type !== "outreach") return false;
   await dynamo.send(new PutCommand({
     TableName: OUTREACH_TABLE,
     Item: { ...existing.Item, status, updatedAt: new Date().toISOString() },
   }));
+  return true;
 }
 
 // ═══ REPLY AGENT — PulseRetain's conversational retention concierge ═══════════
@@ -395,6 +399,14 @@ const ANALYZE_MAX_TOKENS   = 600;
 const ANALYZE_MAX_CHARS    = 6000;   // the dashboard's prompts are ~1.5k chars
 const DAILY_AI_LIMIT       = Number(process.env.DAILY_AI_LIMIT)  || 200;
 const DAILY_SMS_LIMIT      = Number(process.env.DAILY_SMS_LIMIT) || 100;
+// Safety net across ALL gyms, so a burst of new sign-ups can't multiply the
+// per-gym budgets into a runaway bill.
+const GLOBAL_DAILY_AI_LIMIT  = Number(process.env.GLOBAL_DAILY_AI_LIMIT)  || 3000;
+const GLOBAL_DAILY_SMS_LIMIT = Number(process.env.GLOBAL_DAILY_SMS_LIMIT) || 1500;
+// Short-window limits (per minute / per hour), see checkRate below.
+const RATE_PER_TENANT_PER_MIN = Number(process.env.RATE_PER_TENANT_PER_MIN) || 120;
+const LEADS_PER_IP_PER_HOUR   = Number(process.env.LEADS_PER_IP_PER_HOUR)   || 5;
+const LEADS_PER_DAY           = Number(process.env.LEADS_PER_DAY)           || 200;
 const SMS_MAX_CHARS        = 480;
 
 // Atomically count one use of `kind` ("ai" | "sms") for this tenant today (UTC).
@@ -402,21 +414,57 @@ const SMS_MAX_CHARS        = 480;
 // a `usage#...` item (type "usage" — never shown on the dashboard).
 async function consumeQuota(tenantId, kind, limit) {
   const day = new Date().toISOString().slice(0, 10);
+  const expiresAt = Math.floor(Date.parse(day) / 1000) + 3 * 86400; // for DynamoDB TTL
+  const bump = async (key, max, tid) => {
+    try {
+      await dynamo.send(new UpdateCommand({
+        TableName: OUTREACH_TABLE,
+        Key: { logID: key },
+        UpdateExpression: "ADD #n :one SET #t = :type, tenantId = :tid, #d = :day, expiresAt = :exp",
+        ConditionExpression: "attribute_not_exists(#n) OR #n < :limit",
+        ExpressionAttributeNames: { "#n": "count", "#t": "type", "#d": "day" },
+        ExpressionAttributeValues: { ":one": 1, ":limit": max, ":type": "usage", ":tid": tid, ":day": day, ":exp": expiresAt },
+      }));
+      return true;
+    } catch (e) {
+      if (e.name === "ConditionalCheckFailedException") return false;
+      throw e;
+    }
+  };
+  if (!(await bump(`usage#${tenantId}#${kind}#${day}`, limit, tenantId))) { emitMetric("QuotaExceeded"); return false; }
+  const globalLimit = kind === "sms" ? GLOBAL_DAILY_SMS_LIMIT : GLOBAL_DAILY_AI_LIMIT;
+  if (!(await bump(`usage#global#${kind}#${day}`, globalLimit, "global"))) {
+    console.error(`GLOBAL daily ${kind} cap (${globalLimit}) reached — all gyms are paused for today`);
+    emitMetric("GlobalQuotaExceeded");
+    return false;
+  }
+  return true;
+}
+
+// Fixed-window rate limit (e.g. per gym per minute, per IP per hour). Returns
+// false once `limit` calls were made in the current window. Fails open on a
+// DynamoDB hiccup so a storage blip never locks owners out; the daily quotas
+// above still cap anything that costs money.
+async function checkRate(scope, id, limit, windowSeconds) {
+  const { key, expiresAt } = windowKey(scope, id, windowSeconds);
   try {
     await dynamo.send(new UpdateCommand({
       TableName: OUTREACH_TABLE,
-      Key: { logID: `usage#${tenantId}#${kind}#${day}` },
-      UpdateExpression: "ADD #n :one SET #t = :type, tenantId = :tid, #d = :day",
+      Key: { logID: key },
+      UpdateExpression: "ADD #n :one SET #t = :type, expiresAt = :exp",
       ConditionExpression: "attribute_not_exists(#n) OR #n < :limit",
-      ExpressionAttributeNames: { "#n": "count", "#t": "type", "#d": "day" },
-      ExpressionAttributeValues: { ":one": 1, ":limit": limit, ":type": "usage", ":tid": tenantId, ":day": day },
+      ExpressionAttributeNames: { "#n": "count", "#t": "type" },
+      ExpressionAttributeValues: { ":one": 1, ":limit": limit, ":type": "ratelimit", ":exp": expiresAt },
     }));
     return true;
   } catch (e) {
-    if (e.name === "ConditionalCheckFailedException") return false;
-    throw e;
+    if (e.name === "ConditionalCheckFailedException") { emitMetric("RateLimited"); return false; }
+    console.warn("rate limit check failed (allowing):", e.message);
+    return true;
   }
 }
+const tooManyRequests = () => ({ statusCode: 429, headers: { ...CORS, "Content-Type": "application/json" },
+  body: JSON.stringify({ error: "Too many requests in a short time. Please wait a minute and try again.", code: "rate_limited" }) });
 
 function quotaExceeded(what, limit) {
   return { statusCode: 429, headers: { ...CORS, "Content-Type": "application/json" },
@@ -569,7 +617,8 @@ async function saveConversation(tenantId, memberId, memberName, turns, meta = {}
 
 // ─── Lead handling: save to DynamoDB + email notification ─────────────────────
 async function saveLead(lead) {
-  const leadId = String(Date.now());
+  // Random id: a timestamp alone let two requests in the same millisecond overwrite each other.
+  const leadId = `${Date.now()}-${crypto.randomBytes(4).toString("hex")}`;
   const item = {
     leadID: leadId,   // table primary key is "leadID" (capital ID), like the outreach table
     name:    lead.name    || "",
@@ -707,6 +756,7 @@ async function handleTwilioInbound(event) {
   const signature = event.headers?.["x-twilio-signature"] || event.headers?.["X-Twilio-Signature"];
   if (!validateTwilioSignature(WEBHOOK_URL, params, signature)) {
     console.warn("Twilio webhook signature invalid — rejecting");
+    emitMetric("TwilioSignatureInvalid");
     return { statusCode: 403, headers: { "Content-Type": "text/plain" }, body: "invalid signature" };
   }
   const from = toE164(params.From);
@@ -964,8 +1014,10 @@ export const handler = async (event) => {
   // ── Scheduled run (EventBridge) — sends due follow-ups. Function URL calls
   // always carry requestContext, so this branch can't be triggered from the web.
   if (!event.requestContext && (event.source === "aws.events" || event.pulseretainJob === "send_followups")) {
-    return runScheduledFollowups();
+    try { return await runScheduledFollowups(); }
+    catch (e) { console.error("scheduled follow-up run failed:", e); emitMetric("FollowupRunFailed"); throw e; }
   }
+  const requestId = event.requestContext?.requestId || crypto.randomUUID();
 
   // Read the HTTP method from either Function URL payload format:
   //   v2.0 → event.requestContext.http.method   ·   v1.0 → event.httpMethod
@@ -1000,11 +1052,19 @@ export const handler = async (event) => {
   // ── PUBLIC route: the marketing site's demo form posts here with no login ──
   if (body.action === "submit_lead") {
     try {
-      const result = await saveLead(body.lead || {});
+      const checked = cleanLead(body.lead);
+      if (checked.spam) return { statusCode: 200, headers: { ...CORS, "Content-Type": "application/json" }, body: JSON.stringify({ success: true }) };
+      if (checked.error) return { statusCode: 400, headers: CORS, body: JSON.stringify({ error: checked.error }) };
+      // Unauthenticated, so cap per IP and per day: stops a bot from filling the
+      // leads table and flooding the notification inbox through SES.
+      if (!(await checkRate("lead-ip", clientIp(event), LEADS_PER_IP_PER_HOUR, 3600)) ||
+          !(await checkRate("lead-all", "all", LEADS_PER_DAY, 86400))) return tooManyRequests();
+      const result = await saveLead(checked.lead);
       return { statusCode: 200, headers: { ...CORS, "Content-Type": "application/json" }, body: JSON.stringify({ success: true, ...result }) };
     } catch (err) {
-      console.error("submit_lead error:", err);
-      return { statusCode: 500, headers: CORS, body: JSON.stringify({ error: err.message }) };
+      console.error(`[${requestId}] submit_lead error:`, err);
+      emitMetric("ServerError");
+      return { statusCode: 500, headers: CORS, body: JSON.stringify({ error: safeErrorMessage(requestId) }) };
     }
   }
 
@@ -1017,7 +1077,17 @@ export const handler = async (event) => {
     tenantId = await verifyTokenAndGetTenant(authHeader);
   } catch (e) {
     console.warn("Auth rejected:", e.message);
+    emitMetric("AuthRejected");
     return { statusCode: 401, headers: CORS, body: JSON.stringify({ error: "Not authorized. Please sign in again." }) };
+  }
+
+  // Per-gym burst limit on every signed-in route (a normal session makes a few
+  // calls a minute; a script hammering the API is stopped here).
+  if (!(await checkRate("tenant", tenantId, RATE_PER_TENANT_PER_MIN, 60))) return tooManyRequests();
+
+  // Member ids become part of DynamoDB keys, so reject anything unexpected.
+  if (body.memberId != null && !isSafeMemberId(body.memberId)) {
+    return { statusCode: 400, headers: CORS, body: JSON.stringify({ error: "Invalid memberId" }) };
   }
 
   try {
@@ -1042,6 +1112,7 @@ export const handler = async (event) => {
       if (response.statusCode >= 400 || !Array.isArray(claudeData.content)) {
         const error = aiErrorMessage(response.statusCode, claudeData);
         console.warn("analyze: AI request failed:", response.statusCode, error);
+        emitMetric("AIRequestFailed");
         return { statusCode: 502, headers: { ...CORS, "Content-Type": "application/json" }, body: JSON.stringify({ error }) };
       }
 
@@ -1051,8 +1122,12 @@ export const handler = async (event) => {
         const raw   = claudeData.content.filter(b => b.type === "text").map(b => b.text).join("").trim();
         const match = raw.match(/\{[\s\S]*\}/);
         if (match) {
-          const aiResult = JSON.parse(match[0]);
-          await saveMemberResult(tenantId, body.memberId, aiResult);
+          // A malformed model answer must not turn a paid, successful call into a 500.
+          let aiResult = null;
+          try { aiResult = JSON.parse(match[0]); } catch { console.warn("analyze: AI result was not valid JSON; not saved"); }
+          if (aiResult && typeof aiResult === "object" && JSON.stringify(aiResult).length < 20000) {
+            await saveMemberResult(tenantId, body.memberId, aiResult);
+          }
         }
       }
 
@@ -1067,6 +1142,7 @@ export const handler = async (event) => {
     if (body.action === "send_sms") {
       const phone = toE164(body.to);
       if (!phone)          return { statusCode: 400, headers: CORS, body: JSON.stringify({ error: "Invalid phone number" }) };
+      if (!isAllowedSmsDestination(phone)) return { statusCode: 400, headers: CORS, body: JSON.stringify({ error: "Texts can only go to US and Canadian mobile numbers.", code: "unsupported_destination" }) };
       if (!body.message)   return { statusCode: 400, headers: CORS, body: JSON.stringify({ error: "Missing 'message'" }) };
       if (String(body.message).length > SMS_MAX_CHARS) return { statusCode: 400, headers: CORS, body: JSON.stringify({ error: `Message too long (max ${SMS_MAX_CHARS} characters)` }) };
 
@@ -1093,6 +1169,7 @@ export const handler = async (event) => {
       await markContacted(phone);
       await rememberRecipient(phone, tenantId, body.memberId, body.member, outText); // so replies find this member
       await logSend(tenantId, phone, outText, { sid: result.sid, firstContact: first });
+      emitMetric("SmsSent");
       return {
         statusCode: 200,
         headers: { ...CORS, "Content-Type": "application/json" },
@@ -1102,7 +1179,9 @@ export const handler = async (event) => {
 
     // ── Route: "save_outreach" — save outreach log to DynamoDB ──────────────
     if (body.action === "save_outreach") {
-      await saveOutreachLog(tenantId, body.log);
+      if (!(await saveOutreachLog(tenantId, body.log))) {
+        return { statusCode: 400, headers: CORS, body: JSON.stringify({ error: "Invalid outreach log" }) };
+      }
       return {
         statusCode: 200,
         headers: { ...CORS, "Content-Type": "application/json" },
@@ -1112,7 +1191,12 @@ export const handler = async (event) => {
 
     // ── Route: "update_outreach_status" — update outcome in DynamoDB ────────
     if (body.action === "update_outreach_status") {
-      await updateOutreachStatus(tenantId, body.logId, body.status);
+      if (!isSafeMemberId(body.logId) || !OUTREACH_STATUSES.has(body.status)) {
+        return { statusCode: 400, headers: CORS, body: JSON.stringify({ error: "Invalid logId or status" }) };
+      }
+      if (!(await updateOutreachStatus(tenantId, String(body.logId), body.status))) {
+        return { statusCode: 404, headers: CORS, body: JSON.stringify({ error: "Log not found" }) };
+      }
       return {
         statusCode: 200,
         headers: { ...CORS, "Content-Type": "application/json" },
@@ -1127,8 +1211,9 @@ export const handler = async (event) => {
       if (!process.env.ANTHROPIC_API_KEY) {
         return { statusCode: 500, headers: CORS, body: JSON.stringify({ error: "ANTHROPIC_API_KEY not set" }) };
       }
-      const { memberId, member, memberMessage, originalOutreach } = body;
-      if (!memberId || !member || typeof member.name !== "string") {
+      const { memberId, memberMessage, originalOutreach } = body;
+      const member = body.member && typeof body.member === "object" ? { ...body.member, name: String(body.member.name ?? "").slice(0, 120) } : null;
+      if (!memberId || !member || typeof member.name !== "string" || !member.name.trim()) {
         return { statusCode: 400, headers: CORS, body: JSON.stringify({ error: "Missing memberId or member profile" }) };
       }
       const text = String(memberMessage || "").trim().slice(0, 1000);
@@ -1191,6 +1276,7 @@ export const handler = async (event) => {
       if (response.statusCode >= 400 || !Array.isArray(claudeData.content)) {
         const msg = aiErrorMessage(response.statusCode, claudeData);
         console.warn("draft_reply: AI request failed:", response.statusCode, msg);
+        emitMetric("AIRequestFailed");
         return { statusCode: 502, headers: CORS, body: JSON.stringify({ error: msg, turns }) };
       }
       const raw = claudeData.content.filter(b => b.type === "text").map(b => b.text).join("").trim();
@@ -1265,7 +1351,8 @@ export const handler = async (event) => {
 
     // ── Route: "log_reply_sent" — record the studio text the owner approved ──
     if (body.action === "log_reply_sent") {
-      const { memberId, memberName, text } = body;
+      const { memberId, text } = body;
+      const memberName = String(body.memberName ?? "").slice(0, 120);
       if (!memberId || !text) {
         return { statusCode: 400, headers: CORS, body: JSON.stringify({ error: "Missing memberId or text" }) };
       }
@@ -1323,6 +1410,7 @@ export const handler = async (event) => {
     if (body.action === "schedule_followup") {
       const phone = toE164(body.phone);
       if (!phone) return { statusCode: 400, headers: CORS, body: JSON.stringify({ error: "Missing a valid phone number" }) };
+      if (!isAllowedSmsDestination(phone)) return { statusCode: 400, headers: CORS, body: JSON.stringify({ error: "Texts can only go to US and Canadian mobile numbers.", code: "unsupported_destination" }) };
       // Only saved roster members (stable ids) — never the built-in sample roster.
       if (!isStableMemberId(body.memberId)) return { statusCode: 400, headers: CORS, body: JSON.stringify({ error: "Follow-ups can only be scheduled for members saved to your roster." }) };
       if (body.message && String(body.message).length > SMS_MAX_CHARS) return { statusCode: 400, headers: CORS, body: JSON.stringify({ error: `Message too long (max ${SMS_MAX_CHARS} characters)` }) };
@@ -1389,11 +1477,15 @@ export const handler = async (event) => {
     };
 
   } catch (err) {
-    console.error("Lambda error:", err);
+    console.error(`[${requestId}] Lambda error in ${String(body.action).slice(0, 40)}:`, err);
+    emitMetric("ServerError");
+    // Twilio's own rejection text ("not a valid phone number") is useful to the
+    // owner; anything else (DynamoDB, stack details) stays in the logs only.
+    const twilioMsg = /^Twilio|is not a valid|not a mobile|unverified/i.test(String(err?.message)) ? String(err.message).slice(0, 200) : null;
     return {
       statusCode: 500,
       headers: CORS,
-      body: JSON.stringify({ error: err.message }),
+      body: JSON.stringify({ error: twilioMsg || safeErrorMessage(requestId) }),
     };
   }
 };
