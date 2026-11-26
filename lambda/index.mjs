@@ -1,6 +1,6 @@
 // PulseRetain Lambda — the single backend for the owner dashboard.
 // ES modules only (the live handler file is index.mjs; require() crashes it).
-// Every route except the public demo-lead form and the signed Twilio webhook
+// Every route except the public demo-lead form and the signed Twilio and Stripe webhooks
 // requires a verified Cognito login, and all data is scoped to that gym.
 // AI calls and texts are capped per gym per day (see COST GUARDS).
 import https from "https";
@@ -8,6 +8,7 @@ import crypto from "crypto";
 import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
 import { DynamoDBDocumentClient, PutCommand, GetCommand, ScanCommand, UpdateCommand, BatchWriteCommand } from "@aws-sdk/lib-dynamodb";
 import { SESClient, SendEmailCommand } from "@aws-sdk/client-ses";
+import { TIERS, DEFAULT_TRIAL_DAYS, billingKey, customerKey, tierById, recommendTier, tierFits, priceIdForTier, trialInfo, checkoutTrialEnd, summarizeSubscription, billingStatus, hasLiveSubscription, verifyStripeSignature, stripeForm, returnBaseUrl, priceDisplay, isEmail } from "./billing.mjs";
 import { DEFAULT_TZ, isValidTimeZone, isQuietHoursIn, computeDueAt, clampFollowUpDays, defaultFollowUpText, followupKey, settingsKey, processDueFollowups } from "./followups.mjs";
 
 // ─── DynamoDB setup ───────────────────────────────────────────────────────────
@@ -959,6 +960,221 @@ async function runScheduledFollowups(now = new Date()) {
   return summary;
 }
 
+
+// ═══ BILLING (Stripe) ═════════════════════════════════════════════════════════
+// Checkout starts a subscription, the Customer Portal manages it, and Stripe's
+// webhook (POSTed to this same Function URL) keeps a `billing#<gym>` item in the
+// outreach table up to date. Keys come only from Lambda env vars; see
+// docs/BILLING.md. No Stripe SDK: plain HTTPS, like Twilio and Anthropic above.
+const STRIPE_API_VERSION = "2024-06-20";
+const TRIAL_DAYS = Number(process.env.TRIAL_DAYS) || DEFAULT_TRIAL_DAYS;
+
+async function stripeRequest(method, path, params, idempotencyKey) {
+  const key = process.env.STRIPE_SECRET_KEY;
+  if (!key) throw new Error("Billing isn't set up yet (STRIPE_SECRET_KEY missing).");
+  const payload = params ? stripeForm(params) : "";
+  const headers = { Authorization: `Bearer ${key}`, "Stripe-Version": STRIPE_API_VERSION };
+  if (method !== "GET") { headers["Content-Type"] = "application/x-www-form-urlencoded"; headers["Content-Length"] = Buffer.byteLength(payload); }
+  if (idempotencyKey) headers["Idempotency-Key"] = idempotencyKey;
+  const fullPath = method === "GET" && payload ? `${path}?${payload}` : path;
+  const res = await httpsRequest({ hostname: "api.stripe.com", path: fullPath, method, headers }, method === "GET" ? null : payload);
+  let data = {};
+  try { data = JSON.parse(res.body); } catch { /* non-JSON */ }
+  if (res.statusCode >= 400) {
+    const msg = data.error?.message || `Stripe request failed (status ${res.statusCode})`;
+    console.warn("stripe error:", res.statusCode, data.error?.type, msg);
+    throw new Error(msg);
+  }
+  return data;
+}
+
+async function getBillingItem(tenantId) {
+  const r = await dynamo.send(new GetCommand({ TableName: OUTREACH_TABLE, Key: { logID: billingKey(tenantId) } }));
+  return r.Item || null;
+}
+
+// First look starts the free trial. The conditional write means two tabs
+// opening at once can't restart it.
+async function ensureBillingItem(tenantId) {
+  const existing = await getBillingItem(tenantId);
+  if (existing) return existing;
+  const item = { logID: billingKey(tenantId), type: "billing", tenantId, trialStartedAt: new Date().toISOString() };
+  try {
+    await dynamo.send(new PutCommand({ TableName: OUTREACH_TABLE, Item: item, ConditionExpression: "attribute_not_exists(logID)" }));
+    return item;
+  } catch (e) {
+    if (e.name === "ConditionalCheckFailedException") return getBillingItem(tenantId);
+    throw e;
+  }
+}
+
+async function countMembers(tenantId) {
+  const items = await scanAllByTenant(MEMBERS_TABLE, tenantId);
+  return items.filter(i => i.profile).length;
+}
+
+// Live prices from Stripe, cached per warm container so the page stays fast.
+let _priceCache = { at: 0, map: {} };
+async function loadPlanPrices() {
+  if (!process.env.STRIPE_SECRET_KEY) return {};
+  if (Date.now() - _priceCache.at < 10 * 60 * 1000) return _priceCache.map;
+  const map = {};
+  await Promise.all(TIERS.map(async (t) => {
+    const id = priceIdForTier(t.id);
+    if (!id) return;
+    try { map[t.id] = priceDisplay(await stripeRequest("GET", `/v1/prices/${encodeURIComponent(id)}`)); }
+    catch (e) { console.warn(`price ${t.id} lookup failed:`, e.message); }
+  }));
+  _priceCache = { at: Date.now(), map };
+  return map;
+}
+
+async function getBillingView(tenantId) {
+  const [item, memberCount, prices] = await Promise.all([ensureBillingItem(tenantId), countMembers(tenantId), loadPlanPrices()]);
+  const trial = trialInfo(item.trialStartedAt, new Date(), TRIAL_DAYS);
+  const configured = !!process.env.STRIPE_SECRET_KEY && TIERS.every(t => priceIdForTier(t.id));
+  return {
+    status: billingStatus(item, new Date(), TRIAL_DAYS),
+    stripeStatus: item.status || null,
+    tier: item.tier || null,
+    currentPeriodEnd: item.currentPeriodEnd || null,
+    cancelAtPeriodEnd: !!item.cancelAtPeriodEnd,
+    stripeTrialEnd: item.stripeTrialEnd || null,
+    hasCustomer: !!item.customerId,
+    trialDays: TRIAL_DAYS,
+    trialEndsAt: trial.trialEndsAt,
+    trialDaysLeft: trial.daysLeft,
+    memberCount,
+    recommendedTier: recommendTier(memberCount).id,
+    configured,
+    testMode: String(process.env.STRIPE_SECRET_KEY || "").startsWith("sk_test_"),
+    tiers: TIERS.map(t => ({ id: t.id, name: t.name, maxMembers: t.maxMembers, blurb: t.blurb, suggestedMonthly: t.suggestedMonthly, price: prices[t.id] || null, fits: tierFits(t, memberCount) })),
+  };
+}
+
+async function saveCustomerId(tenantId, customerId) {
+  await dynamo.send(new UpdateCommand({
+    TableName: OUTREACH_TABLE, Key: { logID: billingKey(tenantId) },
+    UpdateExpression: "SET customerId = :c, tenantId = :t, #ty = :type, updatedAt = :now",
+    ExpressionAttributeNames: { "#ty": "type" },
+    ExpressionAttributeValues: { ":c": customerId, ":t": tenantId, ":type": "billing", ":now": new Date().toISOString() },
+  }));
+  await dynamo.send(new PutCommand({ TableName: OUTREACH_TABLE, Item: { logID: customerKey(customerId), type: "stripecustomer", customerId, gymTenantId: tenantId } }));
+}
+
+async function createCheckout(tenantId, { tier: tierId, email }, origin) {
+  const tier = tierById(tierId);
+  if (!tier) return { status: 400, error: "Unknown plan." };
+  const priceId = priceIdForTier(tier.id);
+  if (!priceId) return { status: 500, error: `Billing isn't set up yet (${tier.priceEnv} missing).` };
+  const base = returnBaseUrl(origin);
+  if (!base) return { status: 500, error: "Billing isn't set up yet (APP_URL missing)." };
+  const item = await ensureBillingItem(tenantId);
+  if (hasLiveSubscription(item)) return { status: 409, error: "You already have a subscription. Use Manage billing to change it." };
+  const memberCount = await countMembers(tenantId);
+  if (!tierFits(tier, memberCount)) return { status: 400, error: `${tier.name} covers up to ${tier.maxMembers.toLocaleString("en-US")} members and you have ${memberCount.toLocaleString("en-US")}. Pick a larger plan.` };
+
+  let customerId = item.customerId;
+  if (!customerId) {
+    const customer = await stripeRequest("POST", "/v1/customers", {
+      email: isEmail(email) ? email : undefined,
+      metadata: { tenantId },
+    }, `customer-${tenantId}`);
+    customerId = customer.id;
+    await saveCustomerId(tenantId, customerId);
+  }
+
+  const trial = trialInfo(item.trialStartedAt, new Date(), TRIAL_DAYS);
+  const trialEnd = item.status ? null : checkoutTrialEnd(trial.trialEndsAt); // only on a first subscription
+  const session = await stripeRequest("POST", "/v1/checkout/sessions", {
+    mode: "subscription",
+    customer: customerId,
+    client_reference_id: tenantId,
+    line_items: [{ price: priceId, quantity: 1 }],
+    allow_promotion_codes: "true",
+    subscription_data: { metadata: { tenantId, tier: tier.id }, trial_end: trialEnd || undefined },
+    metadata: { tenantId, tier: tier.id },
+    success_url: `${base}/?billing=success`,
+    cancel_url: `${base}/?billing=cancelled`,
+  });
+  return { status: 200, url: session.url };
+}
+
+async function createPortal(tenantId, origin) {
+  const item = await getBillingItem(tenantId);
+  if (!item?.customerId) return { status: 400, error: "No billing account yet. Choose a plan first." };
+  const base = returnBaseUrl(origin);
+  if (!base) return { status: 500, error: "Billing isn't set up yet (APP_URL missing)." };
+  const session = await stripeRequest("POST", "/v1/billing_portal/sessions", { customer: item.customerId, return_url: `${base}/?billing=portal` });
+  return { status: 200, url: session.url };
+}
+
+async function tenantForCustomer(customerId) {
+  if (!customerId) return null;
+  const r = await dynamo.send(new GetCommand({ TableName: OUTREACH_TABLE, Key: { logID: customerKey(customerId) } }));
+  return r.Item?.gymTenantId || null;
+}
+
+// Apply a subscription snapshot. Stripe can deliver events out of order, so an
+// older event never overwrites a newer one.
+async function applySubscription(tenantId, sub, eventCreated) {
+  const s = summarizeSubscription(sub);
+  if (!s) return;
+  try {
+    await dynamo.send(new UpdateCommand({
+      TableName: OUTREACH_TABLE, Key: { logID: billingKey(tenantId) },
+      UpdateExpression: "SET #ty = :type, tenantId = :t, subscriptionId = :sid, customerId = :cid, #st = :status, priceId = :pid, #tier = :tier, currentPeriodEnd = :pe, cancelAtPeriodEnd = :cape, stripeTrialEnd = :te, stripeEventAt = :ev, updatedAt = :now, trialStartedAt = if_not_exists(trialStartedAt, :now)",
+      ConditionExpression: "attribute_not_exists(stripeEventAt) OR stripeEventAt <= :ev",
+      ExpressionAttributeNames: { "#ty": "type", "#st": "status", "#tier": "tier" },
+      ExpressionAttributeValues: {
+        ":type": "billing", ":t": tenantId, ":sid": s.subscriptionId, ":cid": s.customerId, ":status": s.status,
+        ":pid": s.priceId, ":tier": s.tier, ":pe": s.currentPeriodEnd, ":cape": s.cancelAtPeriodEnd, ":te": s.stripeTrialEnd,
+        ":ev": Number(eventCreated) || 0, ":now": new Date().toISOString(),
+      },
+    }));
+    console.log(`billing: ${tenantId} → ${s.status} (${s.tier || s.priceId})`);
+  } catch (e) {
+    if (e.name === "ConditionalCheckFailedException") { console.log("billing: skipped an older Stripe event"); return; }
+    throw e;
+  }
+}
+
+async function handleStripeWebhook(event) {
+  let raw = event.body || "";
+  if (event.isBase64Encoded) raw = Buffer.from(raw, "base64").toString("utf8");
+  const sig = event.headers?.["stripe-signature"] || event.headers?.["Stripe-Signature"];
+  if (!verifyStripeSignature(raw, sig, process.env.STRIPE_WEBHOOK_SECRET)) {
+    console.warn("Stripe webhook signature invalid — rejecting");
+    return { statusCode: 400, headers: { "Content-Type": "text/plain" }, body: "invalid signature" };
+  }
+  const evt = JSON.parse(raw);
+  const obj = evt.data?.object || {};
+  switch (evt.type) {
+    case "checkout.session.completed": {
+      if (obj.mode !== "subscription" || !obj.subscription) break;
+      const tenantId = obj.client_reference_id || obj.metadata?.tenantId || (await tenantForCustomer(obj.customer));
+      if (!tenantId) { console.warn("checkout completed with no gym attached:", obj.id); break; }
+      if (obj.customer) await saveCustomerId(tenantId, obj.customer);
+      const sub = await stripeRequest("GET", `/v1/subscriptions/${encodeURIComponent(obj.subscription)}`);
+      await applySubscription(tenantId, sub, evt.created);
+      break;
+    }
+    case "customer.subscription.created":
+    case "customer.subscription.updated":
+    case "customer.subscription.deleted":
+    case "customer.subscription.paused":
+    case "customer.subscription.resumed": {
+      const tenantId = obj.metadata?.tenantId || (await tenantForCustomer(typeof obj.customer === "string" ? obj.customer : obj.customer?.id));
+      if (!tenantId) { console.warn("subscription event with no gym attached:", obj.id); break; }
+      await applySubscription(tenantId, obj, evt.created);
+      break;
+    }
+    default:
+      break; // other events are acknowledged and ignored
+  }
+  return { statusCode: 200, headers: { "Content-Type": "application/json" }, body: JSON.stringify({ received: true }) };
+}
+
 // ─── Main handler ─────────────────────────────────────────────────────────────
 export const handler = async (event) => {
   // ── Scheduled run (EventBridge) — sends due follow-ups. Function URL calls
@@ -978,6 +1194,13 @@ export const handler = async (event) => {
 
   if (method !== "POST") {
     return { statusCode: 405, headers: CORS, body: JSON.stringify({ error: "Method not allowed" }) };
+  }
+
+  // ── PUBLIC route: Stripe webhook (JSON, signed with Stripe-Signature) ──────
+  // Checked before the auth gate: it's secured by the signing secret instead.
+  if (event.headers?.["stripe-signature"] || event.headers?.["Stripe-Signature"]) {
+    try { return await handleStripeWebhook(event); }
+    catch (e) { console.error("stripe webhook error:", e.message); return { statusCode: 500, headers: { "Content-Type": "text/plain" }, body: "webhook error" }; }
   }
 
   // ── PUBLIC route: inbound SMS webhook from Twilio (form-encoded, not JSON) ──
@@ -1366,6 +1589,18 @@ export const handler = async (event) => {
         removed = await deleteMembers(tenantId, Array.isArray(body.ids) ? body.ids : []);
       }
       return { statusCode: 200, headers: { ...CORS, "Content-Type": "application/json" }, body: JSON.stringify({ success: true, removed }) };
+    }
+
+    // ── Billing routes (Stripe) ─────────────────────────────────────────────
+    if (body.action === "get_billing") {
+      return { statusCode: 200, headers: { ...CORS, "Content-Type": "application/json" }, body: JSON.stringify(await getBillingView(tenantId)) };
+    }
+    if (body.action === "create_checkout_session" || body.action === "create_portal_session") {
+      const origin = event.headers?.origin || event.headers?.Origin;
+      const r = body.action === "create_checkout_session"
+        ? await createCheckout(tenantId, { tier: body.tier, email: body.email }, origin)
+        : await createPortal(tenantId, origin);
+      return { statusCode: r.status, headers: { ...CORS, "Content-Type": "application/json" }, body: JSON.stringify(r.error ? { error: r.error } : { url: r.url }) };
     }
 
     // ── Route: "load_data" — fetch all saved data on page load ───────────────

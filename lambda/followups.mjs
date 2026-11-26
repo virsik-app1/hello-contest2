@@ -4,7 +4,7 @@
 // install. index.mjs supplies the DynamoDB / Twilio functions as `deps`.
 //
 // DEPLOY NOTE: the Lambda now needs BOTH lambda/index.mjs and this file
-// (lambda/followups.mjs) side by side. See docs/FOLLOWUPS.md.
+// (lambda/followups.mjs) side by side, plus lambda/billing.mjs. See docs/FOLLOWUPS.md and docs/BILLING.md.
 
 export const DEFAULT_TZ = "America/New_York";
 
