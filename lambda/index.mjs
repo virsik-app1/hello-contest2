@@ -5,6 +5,7 @@
 // AI calls and texts are capped per gym per day (see COST GUARDS).
 import https from "https";
 import crypto from "crypto";
+import { cleanGymProfile, buildProfileUpdate, profileFromItem } from "./onboarding.mjs";
 import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
 import { DynamoDBDocumentClient, PutCommand, GetCommand, ScanCommand, UpdateCommand, BatchWriteCommand } from "@aws-sdk/lib-dynamodb";
 import { SESClient, SendEmailCommand } from "@aws-sdk/client-ses";
@@ -855,7 +856,13 @@ async function getGymTimeZone(tenantId) {
 }
 async function getGymSettings(tenantId) {
   const r = await dynamo.send(new GetCommand({ TableName: OUTREACH_TABLE, Key: { logID: settingsKey(tenantId) } }));
-  return { timezone: r.Item?.timezone || null, effectiveTimezone: await getGymTimeZone(tenantId), quietStart: QUIET_START, quietEnd: QUIET_END };
+  return { timezone: r.Item?.timezone || null, effectiveTimezone: await getGymTimeZone(tenantId), quietStart: QUIET_START, quietEnd: QUIET_END, ...profileFromItem(r.Item) };
+}
+// Gym profile from the first-run setup (name, avg price, time zone) plus the
+// onboardedAt stamp, all on the same settings item.
+async function saveGymProfile(tenantId, profile, flags) {
+  await dynamo.send(new UpdateCommand({ TableName: OUTREACH_TABLE, Key: { logID: settingsKey(tenantId) }, ...buildProfileUpdate(tenantId, profile, flags) }));
+  if (profile.timezone) tzCache.set(tenantId, { tz: profile.timezone, at: Date.now() });
 }
 async function saveGymTimeZone(tenantId, timezone) {
   await dynamo.send(new UpdateCommand({
@@ -1317,6 +1324,14 @@ export const handler = async (event) => {
       if (!isValidTimeZone(tz)) return { statusCode: 400, headers: CORS, body: JSON.stringify({ error: "Unknown time zone" }) };
       await saveGymTimeZone(tenantId, tz);
       return { statusCode: 200, headers: { ...CORS, "Content-Type": "application/json" }, body: JSON.stringify({ success: true, timezone: tz }) };
+    }
+    // First-run setup: save any of gymName / avgPrice / timezone, and mark
+    // onboarding finished (complete) or put off (skipped).
+    if (body.action === "save_gym_profile") {
+      const { profile, errors } = cleanGymProfile(body.profile || {});
+      if (errors.length) return { statusCode: 400, headers: CORS, body: JSON.stringify({ error: errors.join(" ") }) };
+      await saveGymProfile(tenantId, profile, { complete: body.complete === true, skipped: body.skipped === true });
+      return { statusCode: 200, headers: { ...CORS, "Content-Type": "application/json" }, body: JSON.stringify(await getGymSettings(tenantId)) };
     }
 
     // ── Routes: scheduled follow-ups (sent later by the hourly run) ─────────
