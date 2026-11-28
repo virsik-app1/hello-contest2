@@ -47,8 +47,8 @@ New Lambda actions (behind Cognito auth): `get_sms_number`, `search_sms_numbers 
 
 ## Deploy steps (by hand)
 
-1. Upload `lambda/index.mjs`, `lambda/followups.mjs` **and the new `lambda/smsnumbers.mjs`**
-   side by side (plus `billing.mjs` if the Stripe PR is merged). Without `smsnumbers.mjs` the
+1. Upload every `lambda/*.mjs` file except the tests (`index`, `followups`, `security`,
+   `onboarding`, **and the new `smsnumbers.mjs`**, plus `billing.mjs` if the Stripe PR is merged). Without `smsnumbers.mjs` the
    Lambda fails to start.
 2. No new table, no IAM change, no new secrets: it uses the existing `TWILIO_ACCOUNT_SID` /
    `TWILIO_AUTH_TOKEN`. Node 18+ is needed for `fetch` (the function runs nodejs24.x).

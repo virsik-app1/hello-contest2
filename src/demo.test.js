@@ -35,19 +35,24 @@ test("STOP is respected with no offer", async () => {
   expect(res.draft.escalate).toBe(true);
 });
 
-test("the replies inbox shows a texted reply with a draft until it's handled", async () => {
+test("the replies inbox opens with three waiting replies, each with a sensible draft", async () => {
   const { demoInbox, demoMarkReplyHandled } = await import("./demo");
   let threads = await demoInbox();
-  const ryan = threads.find((t) => t.memberId === "8");
-  expect(ryan.needsReply).toBe(true);
-  expect(ryan.draft.suggestedOffer).toBe("pause_membership");
-  expect(ryan.draft.competitor).toBe("Planet Fitness");
+  const waiting = threads.filter((t) => t.needsReply);
+  expect(waiting.map((t) => t.memberName).sort()).toEqual(["Derek Huang", "Jasmine Patel", "Olivia Bennett"]);
+  const byName = Object.fromEntries(threads.map((t) => [t.memberName, t]));
+  expect(byName["Jasmine Patel"].draft.suggestedOffer).toBe("pause_membership");
+  expect(byName["Jasmine Patel"].draft.competitor).toBe("YMCA");
+  expect(byName["Derek Huang"].draft.departureReason).toBe("injury");
+  expect(byName["Olivia Bennett"].draft.departureReason).toBe("time");
+  expect(byName["Marcus Reid"].needsReply).toBe(false);
   // Re-drafting the same member text must not duplicate it in the thread.
-  const before = demoGetConversation(8).length;
-  await demoDraftReply({ id: 8, name: "Ryan Foster" }, ryan.turns[ryan.turns.length - 1].text);
-  expect(demoGetConversation(8).length).toBe(before);
+  const jasmine = byName["Jasmine Patel"];
+  const before = demoGetConversation(121).length;
+  await demoDraftReply({ id: 121, name: "Jasmine Patel" }, jasmine.turns[jasmine.turns.length - 1].text);
+  expect(demoGetConversation(121).length).toBe(before);
   await new Promise((r) => setTimeout(r, 5));
-  demoMarkReplyHandled("8");
+  demoMarkReplyHandled("121");
   threads = await demoInbox();
-  expect(threads.find((t) => t.memberId === "8").needsReply).toBe(false);
+  expect(threads.find((t) => t.memberId === "121").needsReply).toBe(false);
 });

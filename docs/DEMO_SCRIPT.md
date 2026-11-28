@@ -4,6 +4,16 @@ A tight, rehearsable walkthrough for judging day. Timings are guides. The golden
 
 ---
 
+## Sales demo mode (no customers needed)
+
+Open `/#demo` on the live site, click **Try the demo with a sample studio** on the sign-in screen, or click **Demo mode** in the header when signed in (opens a new tab). It loads Copper Ridge Studio, a made-up two-location boutique studio: 130 members, $1,638/month at risk across 12 high-risk members, a month of outreach with 8 members won back, and 3 texted replies waiting with drafted answers.
+
+- Nothing is sent or saved. Texts and replies are simulated, every phone number is a fictional 555 number, and demo mode never calls the server, so your real members are never touched.
+- **Start over** in the grey demo bar puts the studio back exactly as it began (do this between calls).
+- The studio's data lives in `src/demoGym.js` if you want to change names, prices, or the story.
+
+---
+
 ## Before you start (setup checklist)
 
 - [ ] Live URL open and logged in **already** in one tab: https://main.d2yk3ai4m6puu9.amplifyapp.com
