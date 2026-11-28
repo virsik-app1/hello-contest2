@@ -535,6 +535,127 @@ function Chevron({ open }) {
   );
 }
 
+// ─── Texting number card (Outreach tab) ──────────────────────────────────────
+// Each gym can get its own Twilio number. It only starts sending once the
+// carriers approve the gym's A2P registration; until then texts use the shared
+// PulseRetain number. Buying is switched off on the server unless enabled.
+function SmsNumberCard({ isMobile, showToast }) {
+  const [info, setInfo] = useState(null);
+  const [areaCode, setAreaCode] = useState("");
+  const [results, setResults] = useState(null);
+  const [picked, setPicked] = useState(null);
+  const [gymName, setGymName] = useState("");
+  const [helpContact, setHelpContact] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await apiFetch({ action: "get_sms_number" });
+        if (!r.ok) return; // older Lambda without this action: hide the card
+        const d = await r.json();
+        if (!cancelled) { setInfo(d); setGymName(d.gymName || ""); setHelpContact(d.helpContact || ""); }
+      } catch { /* hide the card */ }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  if (!info) return null;
+
+  async function search(e) {
+    e.preventDefault();
+    setBusy(true); setResults(null); setPicked(null);
+    try {
+      const r = await apiFetch({ action: "search_sms_numbers", areaCode });
+      if (!r.ok) throw await serverError(r);
+      const { numbers = [] } = await r.json();
+      setResults(numbers);
+    } catch (err) { showToast(err.message); }
+    finally { setBusy(false); }
+  }
+  async function buy() {
+    if (!picked) return;
+    setBusy(true);
+    try {
+      const r = await apiFetch({ action: "buy_sms_number", phoneNumber: picked, gymName, helpContact });
+      if (!r.ok) throw await serverError(r);
+      setInfo(await r.json()); setResults(null); setPicked(null);
+      showToast("Number reserved. It starts sending once carrier registration is approved.");
+    } catch (err) { showToast(err.message); }
+    finally { setBusy(false); }
+  }
+  async function saveProfile() {
+    setBusy(true);
+    try {
+      const r = await apiFetch({ action: "save_sms_profile", gymName, helpContact });
+      if (!r.ok) throw await serverError(r);
+      setInfo(await r.json());
+      showToast("Saved");
+    } catch (err) { showToast(err.message); }
+    finally { setBusy(false); }
+  }
+
+  const tone = info.state === "active" ? { c: T.green, bg: T.greenTint, t: "Live" }
+    : info.state === "pending_registration" || info.state === "buying" ? { c: T.amberDark, bg: T.amberTint, t: "Waiting on carriers" }
+    : { c: T.muted, bg: T.soft, t: "Shared number" };
+  const input = { fontFamily: SANS, fontSize: isMobile ? 16 : 13, padding: "7px 10px", borderRadius: 8, border: `1px solid ${T.line}`, color: T.ink, background: "#fff", minWidth: 0 };
+  const fmt = (n) => String(n || "").replace(/^\+1(\d{3})(\d{3})(\d{4})$/, "($1) $2-$3");
+
+  return (
+    <section aria-label="Texting number" style={{ ...accentPanel(T.purple), padding: isMobile ? 16 : 20, marginBottom: 24 }}>
+      <div style={{ display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap" }}>
+        <h2 style={{ margin: 0, fontFamily: SERIF, fontSize: 20, fontWeight: 400, color: T.ink }}>Your texting number</h2>
+        <span style={{ fontSize: 12, fontWeight: 600, color: tone.c, background: tone.bg, padding: "2px 10px", borderRadius: 20 }}>{tone.t}</span>
+      </div>
+      {info.phoneNumber && <p style={{ margin: "8px 0 0", fontSize: 18, color: T.ink, fontWeight: 600 }}>{fmt(info.phoneNumber)}</p>}
+      <p style={{ margin: "6px 0 0", fontSize: 14, color: T.muted }}>{info.label}</p>
+
+      {info.phoneNumber && (
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 14, alignItems: "center" }}>
+          <input aria-label="Gym name shown in HELP replies" placeholder="Gym name" value={gymName} onChange={e => setGymName(e.target.value)} maxLength={60} style={{ ...input, flex: "1 1 160px" }} />
+          <input aria-label="Contact shown in HELP replies" placeholder="Front desk phone or email" value={helpContact} onChange={e => setHelpContact(e.target.value)} maxLength={80} style={{ ...input, flex: "1 1 200px" }} />
+          <button onClick={saveProfile} disabled={busy} style={btn("secondary")}>Save</button>
+        </div>
+      )}
+
+      {!info.phoneNumber && info.state !== "buying" && (
+        info.purchaseEnabled ? (
+          <div style={{ marginTop: 14 }}>
+            <form onSubmit={search} style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+              <label style={{ fontSize: 13, color: T.muted }}>Area code
+                <input inputMode="numeric" pattern="[0-9]{3}" maxLength={3} value={areaCode} onChange={e => setAreaCode(e.target.value.replace(/\D/g, ""))} style={{ ...input, width: 70, marginLeft: 8 }} />
+              </label>
+              <button type="submit" disabled={busy || areaCode.length !== 3} style={btn("secondary")}>Find numbers</button>
+            </form>
+            {results && results.length === 0 && <p style={{ margin: "10px 0 0", fontSize: 13, color: T.muted }}>No numbers available in that area code. Try a nearby one.</p>}
+            {results && results.length > 0 && (
+              <div style={{ marginTop: 12 }}>
+                <div role="radiogroup" aria-label="Available numbers" style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "repeat(2, 1fr)", gap: 8 }}>
+                  {results.map(n => (
+                    <label key={n.phoneNumber} style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 14, color: T.ink, padding: "8px 10px", border: `1px solid ${picked === n.phoneNumber ? T.purple : T.line}`, borderRadius: 8, cursor: "pointer" }}>
+                      <input type="radio" name="sms-number" checked={picked === n.phoneNumber} onChange={() => setPicked(n.phoneNumber)} />
+                      {n.friendlyName}<span style={{ color: T.muted, fontSize: 12 }}>{[n.locality, n.region].filter(Boolean).join(", ")}</span>
+                    </label>
+                  ))}
+                </div>
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 12, alignItems: "center" }}>
+                  <input aria-label="Gym name" placeholder="Gym name (members see this)" value={gymName} onChange={e => setGymName(e.target.value)} maxLength={60} style={{ ...input, flex: "1 1 180px" }} />
+                  <input aria-label="Help contact" placeholder="Front desk phone or email" value={helpContact} onChange={e => setHelpContact(e.target.value)} maxLength={80} style={{ ...input, flex: "1 1 200px" }} />
+                  <button onClick={buy} disabled={busy || !picked || !gymName.trim()} style={btn("primary")}>Get this number</button>
+                </div>
+                <p style={{ margin: "8px 0 0", fontSize: 12, color: T.faint }}>Adds a monthly number fee to the PulseRetain Twilio account. Texting from it starts after carrier registration (usually 2 to 3 weeks).</p>
+              </div>
+            )}
+          </div>
+        ) : (
+          <p style={{ margin: "10px 0 0", fontSize: 13, color: T.faint }}>Dedicated numbers are coming soon.</p>
+        )
+      )}
+    </section>
+  );
+}
+
 export default function App() {
   const isMobile = useIsMobile();
   const install = useInstallPrompt();
@@ -1607,6 +1728,8 @@ export default function App() {
                   </div>
                   {outreachLog.length > 0 && <button onClick={exportOutreachCSV} aria-label="Export outreach log as CSV" style={btn("secondary")}>Export CSV</button>}
                 </div>
+
+                {!IS_DEMO && authStatus === "authenticated" && <SmsNumberCard isMobile={isMobile} showToast={showToast} />}
 
                 {outreachLog.length > 0 && (
                   <div style={{ display: "grid", gridTemplateColumns: isMobile ? "repeat(2, 1fr)" : "repeat(4, 1fr)", gap: 12, marginBottom: 24 }}>

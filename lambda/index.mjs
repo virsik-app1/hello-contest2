@@ -9,6 +9,7 @@ import { cleanGymProfile, buildProfileUpdate, profileFromItem } from "./onboardi
 import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
 import { DynamoDBDocumentClient, PutCommand, GetCommand, ScanCommand, UpdateCommand, BatchWriteCommand } from "@aws-sdk/lib-dynamodb";
 import { SESClient, SendEmailCommand } from "@aws-sdk/client-ses";
+import { senderKey, numberOwnerKey, tenantOptOutKey, tenantContactedKey, tenantRouteKey, chooseSender, senderStatus, helpReply, isBlockedByOptOut, optInKeysToClear, validAreaCode, validE164US, canStartPurchase, cleanProfileField, twilioClient } from "./smsnumbers.mjs";
 import { isAllowedSmsDestination, cleanLead, cleanOutreachLog, isSafeMemberId, OUTREACH_STATUSES, windowKey, clientIp, safeErrorMessage, emitMetric } from "./security.mjs";
 import { DEFAULT_TZ, isValidTimeZone, isQuietHoursIn, computeDueAt, clampFollowUpDays, defaultFollowUpText, followupKey, settingsKey, processDueFollowups } from "./followups.mjs";
 
@@ -93,16 +94,19 @@ export function aiErrorMessage(status, body) {
 }
 
 // ─── Send SMS via Twilio ──────────────────────────────────────────────────────
-async function sendSMS(toPhone, message) {
+// Sends from the gym's own number once it's carrier-registered (see
+// smsnumbers.mjs); until then from the shared TWILIO_PHONE_NUMBER.
+async function sendSMS(toPhone, message, tenantId) {
   const accountSid = process.env.TWILIO_ACCOUNT_SID;
   const authToken  = process.env.TWILIO_AUTH_TOKEN;
-  const fromPhone  = process.env.TWILIO_PHONE_NUMBER;
+  if (!accountSid || !authToken) throw new Error("Twilio credentials not configured.");
 
-  if (!accountSid || !authToken || !fromPhone) {
-    throw new Error("Twilio credentials not configured.");
-  }
+  const sender = chooseSender(tenantId ? await getSenderRecord(tenantId) : null, process.env.TWILIO_PHONE_NUMBER);
+  if (!sender) throw new Error("This gym's texting number isn't approved by the carriers yet, so texts can't be sent.");
 
-  const payload = new URLSearchParams({ To: toPhone, From: fromPhone, Body: message }).toString();
+  const fields = { To: toPhone, From: sender.from, Body: message };
+  if (sender.serviceSid) fields.MessagingServiceSid = sender.serviceSid; // ties the text to the gym's A2P campaign
+  const payload = new URLSearchParams(fields).toString();
   const auth    = Buffer.from(`${accountSid}:${authToken}`).toString("base64");
 
   const response = await httpsRequest(
@@ -121,7 +125,7 @@ async function sendSMS(toPhone, message) {
 
   const result = JSON.parse(response.body);
   if (response.statusCode >= 400) throw new Error(result.message || "Twilio error");
-  return { sid: result.sid, status: result.status, to: result.to };
+  return { sid: result.sid, status: result.status, to: result.to, from: sender.from, ownNumber: sender.own };
 }
 
 // ═══ AUTH — verify the caller's Cognito login and derive their tenant ═════════
@@ -707,33 +711,43 @@ export function validateTwilioSignature(url, params, signature, authToken = proc
   return a.length === b.length && crypto.timingSafeEqual(a, b);
 }
 
-// ── Opt-out suppression list (account-wide, keyed by phone) ──────────────────
-// With one shared Twilio number, an opt-out applies account-wide — matching how
-// the carrier treats a STOP to that number. (Per-gym numbers later can make this
-// per-tenant.) Stored in the outreach table, so no new table or IAM is needed.
+// ── Opt-out suppression list ─────────────────────────────────────────────────
+// A STOP to the shared number applies account-wide (how the carrier treats it);
+// a STOP to a gym's own number applies to that gym. Stored in the outreach
+// table, so no new table or IAM is needed.
 const optOutKey    = (phone) => `optout#${phone}`;
 const contactedKey = (phone) => `contacted#${phone}`;
 
-async function isOptedOut(phone) {
+// Two suppression records, either one blocks a send:
+//   optout#<phone>            STOP to the shared number (or legacy) → every gym
+//   optout#<tenant>#<phone>   STOP to a gym's own number, or "stop" in a reply → that gym
+// Twilio also blocks STOPped numbers per sender on its side (error 21610); this
+// list is ours so the app knows before trying, and covers scheduled follow-ups.
+const getItem = async (logID) => (await dynamo.send(new GetCommand({ TableName: OUTREACH_TABLE, Key: { logID } }))).Item || null;
+async function isOptedOut(phone, tenantId) {
   try {
-    const r = await dynamo.send(new GetCommand({ TableName: OUTREACH_TABLE, Key: { logID: optOutKey(phone) } }));
-    return !!(r.Item && r.Item.optedOut === true);
+    const [g, t] = await Promise.all([getItem(optOutKey(phone)), tenantId ? getItem(tenantOptOutKey(tenantId, phone)) : null]);
+    return isBlockedByOptOut(g, t);
   } catch (e) { console.warn("isOptedOut check failed (blocking to be safe):", e.message); return true; }
 }
-async function setOptOut(phone, meta = {}) {
-  await dynamo.send(new PutCommand({ TableName: OUTREACH_TABLE, Item: { logID: optOutKey(phone), type: "optout", optedOut: true, phone, ...meta, updatedAt: new Date().toISOString() } }));
+// tenantId given → gym-scoped record; omitted → global (shared number).
+async function setOptOut(phone, meta = {}, tenantId = null) {
+  const logID = tenantId ? tenantOptOutKey(tenantId, phone) : optOutKey(phone);
+  await dynamo.send(new PutCommand({ TableName: OUTREACH_TABLE, Item: { logID, type: "optout", optedOut: true, phone, ...(tenantId ? { tenantId } : {}), ...meta, updatedAt: new Date().toISOString() } }));
 }
-async function clearOptOut(phone, meta = {}) {
-  await dynamo.send(new PutCommand({ TableName: OUTREACH_TABLE, Item: { logID: optOutKey(phone), type: "optout", optedOut: false, phone, ...meta, updatedAt: new Date().toISOString() } }));
+async function clearOptOutKey(logID, phone, meta = {}) {
+  await dynamo.send(new PutCommand({ TableName: OUTREACH_TABLE, Item: { logID, type: "optout", optedOut: false, phone, ...meta, updatedAt: new Date().toISOString() } }));
 }
-async function isFirstContact(phone) {
+// First contact is per gym: each gym's first text carries the opt-out footer.
+async function isFirstContact(phone, tenantId) {
   try {
-    const r = await dynamo.send(new GetCommand({ TableName: OUTREACH_TABLE, Key: { logID: contactedKey(phone) } }));
-    return !r.Item;
+    if (tenantId) return !(await getItem(tenantContactedKey(tenantId, phone)));
+    return !(await getItem(contactedKey(phone)));
   } catch { return false; }
 }
-async function markContacted(phone) {
-  try { await dynamo.send(new PutCommand({ TableName: OUTREACH_TABLE, Item: { logID: contactedKey(phone), type: "contacted", phone, at: new Date().toISOString() } })); }
+async function markContacted(phone, tenantId) {
+  const logID = tenantId ? tenantContactedKey(tenantId, phone) : contactedKey(phone);
+  try { await dynamo.send(new PutCommand({ TableName: OUTREACH_TABLE, Item: { logID, type: "contacted", phone, ...(tenantId ? { tenantId } : {}), at: new Date().toISOString() } })); }
   catch (e) { console.warn("markContacted failed:", e.message); }
 }
 // Audit trail: record every send (proof of what/when — protects you legally).
@@ -762,21 +776,37 @@ async function handleTwilioInbound(event) {
   }
   const from = toE164(params.From);
   const kw   = keyword(params.Body);
-  if (from && OPTOUT_WORDS.has(kw)) { await setOptOut(from,   { source: "inbound_sms" }); return twiml(""); } // Twilio's default reply confirms
-  if (from && OPTIN_WORDS.has(kw))  { await clearOptOut(from, { source: "inbound_sms" }); return twiml("You're re-subscribed. Reply STOP to opt out anytime."); }
-  if (HELP_WORDS.has(kw))           { return twiml(HELP_REPLY); }
+  // Which gym was texted? A gym's own number maps to that gym; the shared
+  // number maps to nobody (null), which keeps the old account-wide behavior.
+  const owner = await numberOwner(toE164(params.To));
+  const sender = owner ? await getSenderRecord(owner) : null;
+  if (from && OPTOUT_WORDS.has(kw)) {
+    if (owner) await setOptOut(from, { source: "inbound_sms", to: params.To }, owner);
+    else       await setOptOut(from, { source: "inbound_sms", ...(await routeTenant(from)) });
+    return twiml(""); // Twilio's built-in opt-out reply confirms
+  }
+  if (from && OPTIN_WORDS.has(kw)) {
+    if (owner) {
+      const g = await getItem(optOutKey(from)).catch(() => null);
+      for (const k of optInKeysToClear(owner, from, g)) await clearOptOutKey(k, from, { source: "inbound_sms", ...(k.includes(owner) ? { tenantId: owner } : {}) });
+    } else {
+      await clearOptOutKey(optOutKey(from), from, { source: "inbound_sms" });
+    }
+    return twiml("You're re-subscribed. Reply STOP to opt out anytime.");
+  }
+  if (HELP_WORDS.has(kw)) return twiml(sender ? helpReply(sender) : HELP_REPLY);
   // Ordinary replies: save to the member's thread and pre-draft an answer for
   // the owner to approve in the Outreach tab. Nothing is ever auto-sent back.
-  if (from) await captureInboundReply(from, params.Body, params.MessageSid);
+  if (from) await captureInboundReply(from, params.Body, params.MessageSid, owner);
   return twiml("");
 }
 
 // ═══ INBOUND REPLY CAPTURE ════════════════════════════════════════════════════
 // Twilio only tells us the sender's phone. Every successful send_sms records
 // which gym + member that phone belongs to ("route#<phone>"), so a reply can be
-// filed on the right member's thread. With one shared Twilio number, the gym
-// that texted the number most recently owns the reply. (Per-gym numbers later
-// make this exact.)
+// filed on the right member's thread. On the shared Twilio number, the gym
+// that texted the number most recently owns the reply; on a gym's own number
+// the reply goes to that gym's member exactly.
 const routeKey = (phone) => `route#${phone}`;
 const INBOUND_DRAFT_TIMEOUT_MS = Number(process.env.INBOUND_DRAFT_TIMEOUT_MS) || 8000; // Twilio gives up at 15s
 
@@ -788,14 +818,26 @@ export function memberSnapshot(m = {}) {
   };
 }
 
+// Written twice: route#<phone> (shared number: the gym that texted last owns
+// replies) and route#<tenant>#<phone> (gym's own number: exact).
 async function rememberRecipient(phone, tenantId, memberId, member, text) {
   if (!memberId) return; // older frontend: no member attached, nothing to route to
+  const item = {
+    type: "route", phone, tenantId, memberId: String(memberId),
+    member: memberSnapshot(member), lastText: String(text).slice(0, 500), at: new Date().toISOString(),
+  };
   try {
-    await dynamo.send(new PutCommand({ TableName: OUTREACH_TABLE, Item: {
-      logID: routeKey(phone), type: "route", phone, tenantId, memberId: String(memberId),
-      member: memberSnapshot(member), lastText: String(text).slice(0, 500), at: new Date().toISOString(),
-    } }));
+    await Promise.all([
+      dynamo.send(new PutCommand({ TableName: OUTREACH_TABLE, Item: { ...item, logID: routeKey(phone) } })),
+      dynamo.send(new PutCommand({ TableName: OUTREACH_TABLE, Item: { ...item, logID: tenantRouteKey(tenantId, phone) } })),
+    ]);
   } catch (e) { console.warn("rememberRecipient failed:", e.message); }
+}
+// For a STOP on the shared number: note which gym last texted them (audit only;
+// also lets START on that gym's own number later clear it).
+async function routeTenant(phone) {
+  try { const r = await getItem(routeKey(phone)); return r?.tenantId ? { tenantId: r.tenantId } : {}; }
+  catch { return {}; }
 }
 
 // Pure: add an inbound SMS to a thread. Seeds the thread with the gym's last
@@ -835,19 +877,21 @@ function withTimeout(promise, ms) {
     .finally(() => clearTimeout(timer));
 }
 
-async function captureInboundReply(phone, body, sid) {
+async function captureInboundReply(phone, body, sid, ownerTenant = null) {
   const text = String(body ?? "").trim().slice(0, 1000);
   if (!text) return;
   const at = new Date().toISOString();
   let route = null;
   try {
-    route = (await dynamo.send(new GetCommand({ TableName: OUTREACH_TABLE, Key: { logID: routeKey(phone) } }))).Item || null;
+    route = ownerTenant
+      ? (await getItem(tenantRouteKey(ownerTenant, phone))) || (await getItem(routeKey(phone)).then(r => r?.tenantId === ownerTenant ? r : null))
+      : await getItem(routeKey(phone));
   } catch (e) { console.warn("route lookup failed:", e.message); }
   if (!route) {
     // No gym has texted this number through PulseRetain — keep it for audit
     // rather than silently dropping it.
     await dynamo.send(new PutCommand({ TableName: OUTREACH_TABLE, Item: {
-      logID: `inbound#${phone}#${at}`, type: "inbound_unmatched", phone, text, sid: sid || null, at } }));
+      logID: `inbound#${phone}#${at}`, type: "inbound_unmatched", phone, text, sid: sid || null, ...(ownerTenant ? { tenantId: ownerTenant } : {}), at } }));
     console.warn("inbound reply from unknown number — stored as inbound_unmatched");
     return;
   }
@@ -883,6 +927,98 @@ async function captureInboundReply(phone, body, sid) {
     await saveConversation(tenantId, memberId, member.name, turns, { ...meta, intel, pendingDraft: { ...draft, forAt: at } });
   } catch (e) {
     console.warn("inbound auto-draft skipped:", e.message);
+  }
+}
+
+// ═══ PER-GYM TEXTING NUMBER ═══════════════════════════════════════════════════
+// smsnumber#<tenant> holds the gym's number, its Messaging Service and whether
+// Twilio reports that service's A2P campaign as registered. smsowner#<number>
+// maps an inbound To number back to the gym. Buying a number costs money, so it
+// is off unless the Lambda env var ALLOW_NUMBER_PURCHASE is "true".
+const PURCHASE_ENABLED = () => String(process.env.ALLOW_NUMBER_PURCHASE || "") === "true";
+const senderCache = new Map(); // tenantId → { rec, at }
+async function getSenderRecord(tenantId, { fresh = false } = {}) {
+  const hit = senderCache.get(tenantId);
+  if (!fresh && hit && Date.now() - hit.at < 60 * 1000) return hit.rec;
+  let rec = null;
+  try { rec = await getItem(senderKey(tenantId)); }
+  catch (e) { console.warn("getSenderRecord failed:", e.message); }
+  senderCache.set(tenantId, { rec, at: Date.now() });
+  return rec;
+}
+async function putSenderRecord(rec) {
+  await dynamo.send(new PutCommand({ TableName: OUTREACH_TABLE, Item: { ...rec, updatedAt: new Date().toISOString() } }));
+  senderCache.set(rec.tenantId, { rec, at: Date.now() });
+}
+async function numberOwner(e164) {
+  if (!e164) return null;
+  try { return (await getItem(numberOwnerKey(e164)))?.tenantId || null; }
+  catch (e) { console.warn("numberOwner lookup failed:", e.message); return null; }
+}
+function twilio() {
+  const accountSid = process.env.TWILIO_ACCOUNT_SID, authToken = process.env.TWILIO_AUTH_TOKEN;
+  if (!accountSid || !authToken) throw new Error("Twilio credentials not configured.");
+  return twilioClient({ accountSid, authToken });
+}
+// What the settings card shows. Re-checks A2P status with Twilio while pending.
+async function smsNumberView(tenantId) {
+  let rec = await getSenderRecord(tenantId, { fresh: true });
+  if (rec?.serviceSid && rec.phoneNumber && rec.a2pRegistered !== true) {
+    try {
+      const svc = await twilio().getService(rec.serviceSid);
+      if (svc.a2pRegistered) { rec = { ...rec, a2pRegistered: true, status: "active", activatedAt: new Date().toISOString() }; await putSenderRecord(rec); }
+    } catch (e) { console.warn("A2P status check failed:", e.message); }
+  }
+  const shared = process.env.TWILIO_PHONE_NUMBER || null;
+  return {
+    phoneNumber: rec?.phoneNumber || null,
+    // Falls back to the name from onboarding so the owner doesn't retype it.
+    gymName: rec?.gymName || (await getItem(settingsKey(tenantId)).catch(() => null))?.gymName || "", helpContact: rec?.helpContact || "",
+    a2pRegistered: rec?.a2pRegistered === true,
+    purchaseEnabled: PURCHASE_ENABLED(),
+    ...senderStatus(rec, { purchaseEnabled: PURCHASE_ENABLED(), shared }),
+  };
+}
+async function buySmsNumber(tenantId, { phoneNumber, gymName, helpContact }) {
+  const existing = await getSenderRecord(tenantId, { fresh: true });
+  const gate = canStartPurchase(existing);
+  if (!gate.ok) { const e = new Error(gate.reason); e.status = 409; throw e; }
+  // Lock against a double click buying two numbers.
+  const now = new Date();
+  try {
+    await dynamo.send(new UpdateCommand({
+      TableName: OUTREACH_TABLE, Key: { logID: senderKey(tenantId) },
+      UpdateExpression: "SET #t = :type, tenantId = :tid, #s = :buying, buyingAt = :now, gymName = :g, helpContact = :h",
+      ConditionExpression: "attribute_not_exists(phoneNumber) AND (attribute_not_exists(#s) OR #s <> :buying OR buyingAt < :stale)",
+      ExpressionAttributeNames: { "#t": "type", "#s": "status" },
+      ExpressionAttributeValues: { ":type": "smsnumber", ":tid": tenantId, ":buying": "buying", ":now": now.toISOString(),
+        ":stale": new Date(now.getTime() - 5 * 60 * 1000).toISOString(), ":g": gymName, ":h": helpContact },
+    }));
+  } catch (e) {
+    if (e.name === "ConditionalCheckFailedException") { const err = new Error("A number purchase is already in progress."); err.status = 409; throw err; }
+    throw e;
+  }
+  senderCache.delete(tenantId);
+  const tw = twilio();
+  let rec = { ...(existing || {}), logID: senderKey(tenantId), type: "smsnumber", tenantId, gymName, helpContact };
+  try {
+    // 1) Messaging Service (free). Reused if an earlier attempt already made one.
+    if (!rec.serviceSid) {
+      rec.serviceSid = (await tw.createService(`PulseRetain - ${gymName}`.slice(0, 64), WEBHOOK_URL)).sid;
+      await putSenderRecord({ ...rec, status: "buying", buyingAt: now.toISOString() });
+    }
+    // 2) The number itself (this is the step that costs money).
+    const bought = await tw.buyNumber(phoneNumber, `PulseRetain - ${gymName}`.slice(0, 64), WEBHOOK_URL);
+    rec = { ...rec, phoneNumber: bought.phoneNumber, phoneSid: bought.sid, purchasedAt: new Date().toISOString(), a2pRegistered: false, status: "pending_registration" };
+    await putSenderRecord(rec);
+    await dynamo.send(new PutCommand({ TableName: OUTREACH_TABLE, Item: { logID: numberOwnerKey(bought.phoneNumber), type: "smsowner", tenantId, phoneNumber: bought.phoneNumber, at: new Date().toISOString() } }));
+    // 3) Put it in the gym's Messaging Service (where the A2P campaign attaches).
+    try { await tw.addNumberToService(rec.serviceSid, bought.sid); }
+    catch (e) { console.error("addNumberToService failed (fix in Twilio console):", e.message); rec = { ...rec, serviceAttachError: String(e.message).slice(0, 200) }; await putSenderRecord(rec); }
+    return rec;
+  } catch (e) {
+    if (!rec.phoneNumber) await putSenderRecord({ ...rec, status: "none", buyingAt: null }); // unlock so they can retry
+    throw e;
   }
 }
 
@@ -997,7 +1133,7 @@ async function runScheduledFollowups(now = new Date()) {
 
   const summary = await processDueFollowups(due, now, {
     getTimeZone: getGymTimeZone,
-    isOptedOut,
+    isOptedOut: (phone, tenantId) => isOptedOut(phone, tenantId),
     getConversationTurns: (tenantId, memberId) => getConversation(tenantId, memberId),
     claim: async (item) => {
       try { await update(item, { status: "sending" }, "scheduled"); return true; }
@@ -1154,7 +1290,7 @@ export const handler = async (event) => {
       if (String(body.message).length > SMS_MAX_CHARS) return { statusCode: 400, headers: CORS, body: JSON.stringify({ error: `Message too long (max ${SMS_MAX_CHARS} characters)` }) };
 
       // 1) Never text someone who has opted out (TCPA + Twilio requirement).
-      if (await isOptedOut(phone)) {
+      if (await isOptedOut(phone, tenantId)) {
         return { statusCode: 403, headers: { ...CORS, "Content-Type": "application/json" },
           body: JSON.stringify({ error: "This member has opted out of texts and can't be contacted.", code: "opted_out" }) };
       }
@@ -1168,14 +1304,14 @@ export const handler = async (event) => {
       if (!(await consumeQuota(tenantId, "sms", DAILY_SMS_LIMIT))) return quotaExceeded("texting", DAILY_SMS_LIMIT);
       // 4) On first contact (or when asked), append the opt-out notice if it fits.
       let outText = String(body.message);
-      const first = await isFirstContact(phone);
+      const first = await isFirstContact(phone, tenantId);
       const needsFooter = (first || body.includeOptOut === true) && !/\bstop\b/i.test(outText);
       if (needsFooter && outText.length + 1 + OPTOUT_FOOTER.length <= 480) outText = `${outText} ${OPTOUT_FOOTER}`;
 
-      const result = await sendSMS(phone, outText);
-      await markContacted(phone);
+      const result = await sendSMS(phone, outText, tenantId);
+      await markContacted(phone, tenantId);
       await rememberRecipient(phone, tenantId, body.memberId, body.member, outText); // so replies find this member
-      await logSend(tenantId, phone, outText, { sid: result.sid, firstContact: first });
+      await logSend(tenantId, phone, outText, { sid: result.sid, firstContact: first, from: result.from });
       emitMetric("SmsSent");
       return {
         statusCode: 200,
@@ -1233,7 +1369,7 @@ export const handler = async (event) => {
       // WITHOUT calling the model (deterministic for this legally-sensitive case).
       if (OPTOUT_WORDS.has(keyword(text))) {
         const optPhone = toE164(member.phone);
-        if (optPhone) await setOptOut(optPhone, { source: "member_reply", tenantId, memberId: String(memberId) });
+        if (optPhone) await setOptOut(optPhone, { source: "member_reply", memberId: String(memberId) }, tenantId);
         const ci = await loadConversationItem(tenantId, memberId);
         const t  = (ci && Array.isArray(ci.turns)) ? ci.turns : [];
         const ack = "You're unsubscribed and won't get more texts from us. Reply START anytime to opt back in. Take care!";
@@ -1421,6 +1557,36 @@ export const handler = async (event) => {
       return { statusCode: 200, headers: { ...CORS, "Content-Type": "application/json" }, body: JSON.stringify(await getGymSettings(tenantId)) };
     }
 
+    // ── Routes: the gym's own texting number ─────────────────────────────────
+    if (body.action === "get_sms_number") {
+      return { statusCode: 200, headers: { ...CORS, "Content-Type": "application/json" }, body: JSON.stringify(await smsNumberView(tenantId)) };
+    }
+    if (body.action === "search_sms_numbers") {
+      if (!validAreaCode(body.areaCode)) return { statusCode: 400, headers: CORS, body: JSON.stringify({ error: "Enter a 3-digit US area code." }) };
+      const numbers = await twilio().searchLocal(String(body.areaCode), 8);
+      return { statusCode: 200, headers: { ...CORS, "Content-Type": "application/json" }, body: JSON.stringify({ numbers }) };
+    }
+    if (body.action === "buy_sms_number") {
+      if (!PURCHASE_ENABLED()) return { statusCode: 403, headers: { ...CORS, "Content-Type": "application/json" }, body: JSON.stringify({ error: "Getting a dedicated number isn't switched on yet.", code: "purchase_disabled" }) };
+      if (!validE164US(body.phoneNumber)) return { statusCode: 400, headers: CORS, body: JSON.stringify({ error: "Pick a number from the search results." }) };
+      const gymName = cleanProfileField(body.gymName, 60);
+      if (!gymName) return { statusCode: 400, headers: CORS, body: JSON.stringify({ error: "Enter your gym's name. Members see it when they text HELP." }) };
+      try {
+        await buySmsNumber(tenantId, { phoneNumber: body.phoneNumber, gymName, helpContact: cleanProfileField(body.helpContact, 80) });
+      } catch (e) {
+        return { statusCode: e.status || 502, headers: { ...CORS, "Content-Type": "application/json" }, body: JSON.stringify({ error: e.message || "Couldn't get that number." }) };
+      }
+      return { statusCode: 200, headers: { ...CORS, "Content-Type": "application/json" }, body: JSON.stringify(await smsNumberView(tenantId)) };
+    }
+    if (body.action === "save_sms_profile") {
+      const rec = await getSenderRecord(tenantId, { fresh: true });
+      if (!rec || !rec.phoneNumber) return { statusCode: 404, headers: CORS, body: JSON.stringify({ error: "No texting number yet." }) };
+      const gymName = cleanProfileField(body.gymName, 60);
+      if (!gymName) return { statusCode: 400, headers: CORS, body: JSON.stringify({ error: "Enter your gym's name." }) };
+      await putSenderRecord({ ...rec, gymName, helpContact: cleanProfileField(body.helpContact, 80) });
+      return { statusCode: 200, headers: { ...CORS, "Content-Type": "application/json" }, body: JSON.stringify(await smsNumberView(tenantId)) };
+    }
+
     // ── Routes: scheduled follow-ups (sent later by the hourly run) ─────────
     if (body.action === "schedule_followup") {
       const phone = toE164(body.phone);
@@ -1429,7 +1595,7 @@ export const handler = async (event) => {
       // Only saved roster members (stable ids) — never the built-in sample roster.
       if (!isStableMemberId(body.memberId)) return { statusCode: 400, headers: CORS, body: JSON.stringify({ error: "Follow-ups can only be scheduled for members saved to your roster." }) };
       if (body.message && String(body.message).length > SMS_MAX_CHARS) return { statusCode: 400, headers: CORS, body: JSON.stringify({ error: `Message too long (max ${SMS_MAX_CHARS} characters)` }) };
-      if (await isOptedOut(phone)) {
+      if (await isOptedOut(phone, tenantId)) {
         return { statusCode: 403, headers: { ...CORS, "Content-Type": "application/json" },
           body: JSON.stringify({ error: "This member has opted out of texts and can't be contacted.", code: "opted_out" }) };
       }
