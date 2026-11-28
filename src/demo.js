@@ -1,9 +1,12 @@
-// ─── Public no-login demo ("/#demo") ──────────────────────────────────────────
-// Opened from the QR code on the research poster. Visitors see the full owner
-// dashboard with the sample gym, without creating an account. Nothing in demo
+// ─── Demo mode ("/#demo") ─────────────────────────────────────────────────────
+// Used for sales demos and opened from the QR code on the research poster.
+// Visitors see the full owner dashboard with a fictional boutique studio
+// (see demoGym.js), without creating an account. Nothing in demo
 // mode touches the server: AI results are pre-written, texts are never sent,
 // and replies/insights live only in this browser tab. That keeps the demo free
 // to run, fast on conference Wi-Fi, and impossible to abuse.
+
+import { DEMO_GYM, DEMO_MEMBERS, DEMO_PRESETS, DEMO_PAST_DEPARTURES, DEMO_REPLY_THREADS, demoMember, demoOutreachHistory } from "./demoGym";
 
 export function isDemoMode(hash = typeof window !== "undefined" ? window.location.hash : "") {
   return /^#\/?demo(?:$|[/?&])/.test(hash || "");
@@ -16,34 +19,31 @@ export function exitDemoToSignUp() {
   window.location.replace(window.location.origin + window.location.pathname + "?signup");
 }
 
+export function demoUrl() {
+  return window.location.origin + window.location.pathname + "#demo";
+}
+
+// From the sign-in screen: switch this tab into the demo. Demo mode is decided
+// when the page loads, so the page reloads on the demo address.
+export function enterDemo() {
+  window.location.assign(demoUrl());
+  window.location.reload();
+}
+
+// Start the demo over: every demo change lives only in this tab's memory, so a
+// reload puts the studio back exactly as it started. Handy between sales calls.
+export function resetDemo() {
+  window.location.reload();
+}
+
+export { DEMO_GYM, DEMO_MEMBERS };
+
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 const firstName = (m) => String(m.name || "there").split(" ")[0];
 
-// Hand-written analyses for the built-in sample gym (ids 1–10), so the story a
-// visitor reads is as good as a live AI run.
-const PRESET = {
-  1:  { riskLevel: "high",   score: 91, followUpDays: 3, offerType: "class_credit",
-        reason: "Has skipped her usual Tue & Thu classes for 9 days after 14 months of steady attendance, and only has 2 classes booked ahead.",
-        message: "Hi Sarah! We've missed you at Tuesday & Thursday class. Your spot's waiting, and your next class is on us. See you this week?" },
-  2:  { riskLevel: "high",   score: 78, followUpDays: 3, offerType: "free_guest_pass",
-        reason: "Missed his usual Saturday class two weeks running and has a missed payment on his 10-class pack.",
-        message: "Hey Tom, Saturday class wasn't the same without you! Bring a friend this weekend on us. Want me to save you two spots?" },
-  3:  { riskLevel: "medium", score: 54, followUpDays: 5, offerType: "none",
-        reason: "Long-time member (22 months) whose Mon/Wed/Fri rhythm slipped to one visit in the last 4 days.",
-        message: "Hi Jessica! Just checking in. Is the Mon/Wed/Fri schedule still working for you? We'd love to help you keep the streak going." },
-  4:  { riskLevel: "medium", score: 47, followUpDays: 5, offerType: "personal_trainer_intro",
-        reason: "Newer member (5 months) still settling in; missed one of his Tue & Thu sessions this week.",
-        message: "Hey Marcus, great work these first months! Want a free 20-min session with a coach to plan your next goal?" },
-  8:  { riskLevel: "high",   score: 83, followUpDays: 2, offerType: "discount_percent",
-        reason: "Hasn't come in on weekends for 8 days, has 2 missed payments and nothing booked ahead. Price may be the issue.",
-        message: "Hi Ryan, we noticed weekends have been busy. We'd love to keep you on the team. Here's 10% off next month if that helps!" },
-  9:  { riskLevel: "high",   score: 88, followUpDays: 2, offerType: "class_credit",
-        reason: "No visits in 11 days (normally Wed & Fri), a missed payment, and zero classes booked. A sharp drop-off.",
-        message: "Hi Camille, we miss you at Wed & Fri class! Your next one is on the house. Want me to book you in this Friday?" },
-  10: { riskLevel: "medium", score: 61, followUpDays: 4, offerType: "class_credit",
-        reason: "Down from Tue & Thu to one visit in 5 days, with only 2 classes booked. Early signs of drifting.",
-        message: "Hey Jordan! Haven't seen you since last week. A free class credit is waiting whenever you're ready to jump back in." },
-};
+// Hand-written analyses for the sample studio's at-risk members, so the story
+// a prospect reads is as good as a live AI run.
+const PRESET = DEMO_PRESETS;
 
 // Works for any member (e.g. the bigger sample gym roster): builds a specific,
 // believable reason and message from the member's own data.
@@ -79,33 +79,22 @@ export async function demoAnalyze(member) {
 // Results shown the moment the demo opens, so Today's Priorities is ready.
 export function demoInitialAiResults(members) {
   const out = {};
-  for (const m of members) if (m.risk === "high" && PRESET[m.id]) out[m.id] = demoAnalysisFor(m);
+  for (const m of members) if (PRESET[m.id]) out[m.id] = demoAnalysisFor(m);
   return out;
 }
 
-// A little history so the Outreach and Analytics tabs aren't empty.
+// A month of outreach history: members won back, replies, and texts still
+// waiting on an answer, so the Outreach and Insights tabs look like a real gym's.
 export function demoInitialOutreach() {
-  const day = 24 * 60 * 60 * 1000;
-  const at = (d) => new Date(Date.now() - d * day).toLocaleString();
-  return [
-    { id: 9001, memberId: 3, memberName: "Jessica Lane", plan: "Unlimited Monthly", value: 79,
-      message: PRESET[3].message, sentAt: at(6), status: "recovered", followUpDays: 5, smsSent: true },
-    { id: 9002, memberId: 4, memberName: "Marcus Webb", plan: "Unlimited Monthly", value: 79,
-      message: PRESET[4].message, sentAt: at(2), status: "responded", followUpDays: 5, smsSent: true },
-  ];
+  return demoOutreachHistory();
 }
 
 // ── Reply conversations + competitive intel (kept in memory for this tab) ────
 const convs = {};      // memberId → turns
 const intelByMember = {}; // memberId → { departureReason, competitor, memberName, memberValue }
 
-// Past conversations, so the Competitors tab shows something on first open.
-const SEED_INTEL = [
-  { departureReason: "competitor", competitor: "FlexFit 24", memberName: "Dana Ortiz", memberValue: 79 },
-  { departureReason: "competitor", competitor: "FlexFit 24", memberName: "Luis Moreno", memberValue: 49 },
-  { departureReason: "cost",       competitor: null,         memberName: "Kate Hall",   memberValue: 79 },
-  { departureReason: "time",       competitor: null,         memberName: "Ben Price",   memberValue: 29 },
-];
+// Members who already left and said why, so Insights has a story on first open.
+const SEED_INTEL = DEMO_PAST_DEPARTURES;
 
 const KNOWN_GYMS = [
   "Planet Fitness", "Orangetheory", "Orange Theory", "CrossFit", "LA Fitness", "Equinox", "Crunch",
@@ -224,13 +213,19 @@ function seedDemoInbox() {
   if (inboxSeeded) return;
   inboxSeeded = true;
   const hoursAgo = (h) => new Date(Date.now() - h * 3600e3).toISOString();
-  convs[8] = [
-    { role: "studio", text: PRESET[8].message, at: hoursAgo(20) },
-    { role: "member", text: "Thanks. Honestly money's tight and Planet Fitness is like $15 a month", at: hoursAgo(2), via: "sms", from: "+17045550562" },
-  ];
+  for (const t of DEMO_REPLY_THREADS) {
+    const m = demoMember(t.memberId);
+    if (!m) continue;
+    const opening = PRESET[t.memberId] ? PRESET[t.memberId].message : "Hi " + firstName(m) + ", we've missed you! Want me to save you a spot this week?";
+    const from = "+1" + String(m.phone).replace(/\D/g, "");
+    convs[t.memberId] = [
+      { role: "studio", text: opening, at: hoursAgo(t.sentHoursAgo) },
+      { role: "member", text: t.text, at: hoursAgo(t.repliedHoursAgo), via: "sms", from },
+    ];
+    if (t.studioReply) convs[t.memberId].push({ role: "studio", text: t.studioReply, at: hoursAgo(t.repliedHoursAgo - 0.5) });
+    if (t.handled) handledAt[t.memberId] = hoursAgo(t.repliedHoursAgo - 0.5);
+  }
 }
-
-const DEMO_PROFILES = { 8: { name: "Ryan Foster", plan: "10-Class Pack", value: 49, joinedMonths: 9, usualVisits: "Weekends", lastVisit: "8 days ago" } };
 
 export async function demoInbox() {
   seedDemoInbox();
@@ -241,7 +236,7 @@ export async function demoInbox() {
       if (sms.length === 0) return null;
       const lastMember = [...turns].reverse().find((t) => t.role === "member");
       const last = turns[turns.length - 1];
-      const member = DEMO_PROFILES[memberId] || { name: "Member" };
+      const member = demoMember(Number(memberId)) || { name: "Member" };
       return {
         memberId, memberName: member.name, phone: sms[sms.length - 1].from, member,
         needsReply: last.role === "member" && !(handledAt[memberId] >= lastMember.at),

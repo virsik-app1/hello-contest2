@@ -7,7 +7,7 @@ import { buildStats, deriveRisk, isDemoPhone, pickTodaysQueue } from "./retentio
 import { parseMembersCSV, SAMPLE_CSV_HEADERS, SAMPLE_CSV_ROWS, SAMPLE_GYM_CSV } from "./importMembers";
 import { isStableId, newMemberId, withStableIds, normalizeMemberId, restoreResults } from "./memberStore";
 import { computeInsights } from "./strategist";
-import { IS_DEMO, exitDemoToSignUp, demoAnalyze, demoDraftReply, demoGetConversation, demoLogReplySent, demoCompetitiveIntel, demoInitialAiResults, demoInitialOutreach, demoInbox, demoMarkReplyHandled } from "./demo";
+import { IS_DEMO, DEMO_GYM, DEMO_MEMBERS, demoUrl, enterDemo, resetDemo, exitDemoToSignUp, demoAnalyze, demoDraftReply, demoGetConversation, demoLogReplySent, demoCompetitiveIntel, demoInitialAiResults, demoInitialOutreach, demoInbox, demoMarkReplyHandled } from "./demo";
 import { listLocations, filterByLocation, summarizeLocations, ALL_LOCATIONS } from "./locations";
 import Onboarding from "./Onboarding";
 import { shouldShowOnboarding, wantsSignUp, applyDefaultPrice } from "./gymSetup";
@@ -129,6 +129,9 @@ const initialMembers = [
   { id: 9,  name: "Camille Torres",  initials: "CT", plan: "Unlimited Monthly", lastVisit: "11 days ago", usualVisits: "Wed & Fri",      risk: "high",   score: 88, value: 79,  email: "c.torres@email.com", phone: "(704) 555-0338", joinedMonths: 11, missedPayments: 1, classesBooked: 0, location: "West End" },
   { id: 10, name: "Jordan Kim",      initials: "JK", plan: "Unlimited Monthly", lastVisit: "5 days ago",  usualVisits: "Tue & Thu",      risk: "medium", score: 61, value: 79,  email: "j.kim@email.com",    phone: "(704) 555-0491", joinedMonths: 8,  missedPayments: 0, classesBooked: 2, location: "West End" },
 ];
+
+// Demo mode opens on the fictional sample studio instead of the starter roster.
+const startingMembers = IS_DEMO ? DEMO_MEMBERS : initialMembers;
 
 // ─── Risk config ─────────────────────────────────────────────────────────────
 const riskConfig = {
@@ -396,13 +399,16 @@ const authComponents = {
     return (
       <div style={{ textAlign: "center", padding: "18px 20px 40px" }}>
         <p style={{ color: "#8a8ba8", fontSize: 12, margin: 0 }}>Member retention for fitness studios</p>
+        <button onClick={enterDemo} style={{ marginTop: 14, background: "none", border: "1px solid #4a4b6a", borderRadius: 8, padding: "8px 16px", color: "#e8e8f4", fontSize: 13, cursor: "pointer" }}>
+          Try the demo with a sample studio
+        </button>
       </div>
     );
   },
 };
 
 // Demo mode skips sign-in entirely; everyone else gets the normal Cognito login.
-const DEMO_USER = { signInDetails: { loginId: "Demo gym · sample data" } };
+const DEMO_USER = { signInDetails: { loginId: `${DEMO_GYM.name} · sample data` } };
 function AuthGate({ children }) {
   if (IS_DEMO) return children({ signOut: exitDemoToSignUp, user: DEMO_USER });
   return <Authenticator components={authComponents} initialState={wantsSignUp() ? "signUp" : "signIn"}>{children}</Authenticator>;
@@ -540,7 +546,7 @@ export default function App() {
     setInstallDismissed(true);
     try { localStorage.setItem("pulseretain-install-dismissed", "1"); } catch { /* private mode */ }
   }
-  const [members, setMembers]         = useState(initialMembers);
+  const [members, setMembers]         = useState(startingMembers);
   const [usingImported, setUsingImported] = useState(false);
   const importInputRef                = useRef(null);
   const [showData, setShowData]       = useState(false);    // "Add members" modal
@@ -549,7 +555,7 @@ export default function App() {
   const blankMember = { name: "", plan: "", value: "", lastVisit: "", joinDate: "", missedPayments: "", classesBooked: "", schedule: "", email: "", phone: "", location: "" };
   const [addForm, setAddForm]         = useState(blankMember);
   const [selected, setSelected]       = useState(null);
-  const [aiResults, setAiResults]     = useState(() => (IS_DEMO ? demoInitialAiResults(initialMembers) : {}));
+  const [aiResults, setAiResults]     = useState(() => (IS_DEMO ? demoInitialAiResults(startingMembers) : {}));
   const [loading, setLoading]         = useState({});
   const [analyzing, setAnalyzing]     = useState(false);
   const [activeTab, setActiveTab]     = useState("Today");
@@ -859,10 +865,10 @@ export default function App() {
   function resetToDemo() {
     if (!IS_DEMO && !window.confirm("Remove your saved roster and go back to the demo members? Saved analyses for these members are deleted too.")) return;
     clearSavedRoster().catch(err => showToast(`Couldn't remove the saved roster: ${err.message}`));
-    setMembers(initialMembers);
+    setMembers(startingMembers);
     setUsingImported(false);
     setSelected(null);
-    setAiResults({});
+    setAiResults(IS_DEMO ? demoInitialAiResults(startingMembers) : {});
     showToast("Restored the demo roster");
   }
 
@@ -1362,6 +1368,10 @@ export default function App() {
               )}
               <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 14 }}>
                 {!isMobile && <span style={{ fontSize: 13, color: T.faint }}>{user?.signInDetails?.loginId}</span>}
+                {!IS_DEMO && (
+                  <a href={demoUrl()} target="_blank" rel="noopener noreferrer" title="Opens a sample studio in a new tab. Your members and data are not touched."
+                    style={{ fontSize: 13, color: T.purple, textDecoration: "none", fontWeight: 500 }}>Demo mode</a>
+                )}
                 <button onClick={signOut} style={btn("secondary", { padding: "6px 12px", fontWeight: 500 })}>{IS_DEMO ? "Sign up" : "Sign out"}</button>
               </div>
             </div>
@@ -1381,7 +1391,8 @@ export default function App() {
           {/* ── Demo note (public no-login demo) ── */}
           {IS_DEMO && (
             <div role="note" style={{ background: T.soft, borderBottom: `1px solid ${T.line}`, padding: `9px ${pad}`, fontSize: 13, color: T.muted, textAlign: "center", lineHeight: 1.5 }}>
-              You're viewing a demo gym with sample members. No texts are sent.{" "}
+              Demo mode: {DEMO_GYM.name} is a sample studio with made-up members. No texts are sent and nothing is saved.{" "}
+              <button onClick={resetDemo} style={{ background: "none", border: "none", padding: 0, marginRight: 12, fontFamily: SANS, fontSize: 13, color: T.ink, fontWeight: 600, textDecoration: "underline", cursor: "pointer" }}>Start over</button>
               <button onClick={exitDemoToSignUp} style={{ background: "none", border: "none", padding: 0, fontFamily: SANS, fontSize: 13, color: T.ink, fontWeight: 600, textDecoration: "underline", cursor: "pointer" }}>Sign up to use your own members</button>
             </div>
           )}
@@ -1403,7 +1414,7 @@ export default function App() {
                 {/* Page title + location picker */}
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap", marginBottom: isMobile ? 14 : 18 }}>
                   <p style={{ margin: 0, fontSize: 13, color: T.muted }}>
-                    {todayLabel} · {usingImported ? (gymProfile?.gymName || "Your roster") : "Pulse Studio"} · {scopedMembers.length} members{filterLocation !== ALL_LOCATIONS ? ` at ${filterLocation}` : ""}
+                    {todayLabel} · {usingImported ? (gymProfile?.gymName || "Your roster") : IS_DEMO ? DEMO_GYM.name : "Pulse Studio"} · {scopedMembers.length} members{filterLocation !== ALL_LOCATIONS ? ` at ${filterLocation}` : ""}
                     {usingImported && <button onClick={resetToDemo} style={{ marginLeft: 10, background: "none", border: "none", color: T.muted, fontSize: 13, cursor: "pointer", textDecoration: "underline", padding: 0 }}>Reset to demo</button>}
                   </p>
                   {locations.length > 1 && (
