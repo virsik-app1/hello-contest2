@@ -62,8 +62,9 @@ environment variables.
    | `TRIAL_DAYS` (optional) | `14`                                             |
 
    Save. Existing variables (Anthropic, Twilio) stay as they are.
-7. **Deploy the code.** Upload `lambda/index.mjs`, `lambda/followups.mjs` **and the new
-   `lambda/billing.mjs`** together (index imports both). The frontend deploys itself when the PR
+7. **Deploy the code.** Upload every non-test `.mjs` file in `lambda/` together
+   (`index.mjs`, `followups.mjs`, `security.mjs`, `onboarding.mjs` **and the new `billing.mjs`**),
+   because index imports them all. The frontend deploys itself when the PR
    merges to `main`.
 
 ## Testing it
