@@ -67,7 +67,9 @@ test("subject leads with money saved, then money at risk", () => {
 test("html escapes member names and links to the dashboard", () => {
   const r = buildWeeklyReport({ memberItems, outreachItems, now: NOW });
   r.toContact.push({ name: "<script>x</script>", score: 90, value: 10, risk: "high", reason: "" });
+  r.gymName = "Iron & Oak";
   const html = renderWeeklyReportHtml(r, { dashboardUrl: "https://example.test/app" });
+  assert.ok(html.includes("for Iron &amp; Oak"));
   assert.ok(!html.includes("<script>x"));
   assert.ok(html.includes("&lt;script&gt;"));
   assert.ok(html.includes('href="https://example.test/app"'));

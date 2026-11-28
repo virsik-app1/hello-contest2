@@ -51,7 +51,7 @@ What that means: once deployed, Carter can test the report on himself right away
 3. **Lambda environment variables** (Configuration → Environment variables):
    - `REPORT_FROM_EMAIL` = the verified address, e.g. `reports@pulseretain.com` (falls back to `NOTIFY_EMAIL` if unset)
    - `DASHBOARD_URL` (optional) = the app link in the email; defaults to `https://main.d2yk3ai4m6puu9.amplifyapp.com`
-4. **Deploy the Lambda code:** upload `index.mjs`, `followups.mjs` **and the new `weeklyReport.mjs`** side by side (the Lambda fails to start without it).
+4. **Deploy the Lambda code:** upload every file in `lambda/` that isn't a test (`index.mjs`, `followups.mjs`, `security.mjs`, `onboarding.mjs` **and the new `weeklyReport.mjs`**) side by side (the Lambda fails to start without it).
 5. **Schedule:** EventBridge → Rules → Create rule → *Schedule* → cron `0 13 ? * MON *` (Mondays 13:00 UTC = 8am Eastern, 5am Pacific) → target: `pulseretain-claude-proxy` → *Additional settings* → **Constant (JSON text)**: `{"pulseretainJob":"weekly_report"}`.
    The constant input matters: without it the event looks like the hourly follow-up run and sends follow-ups instead of reports.
 6. **Try it:** sign in to the dashboard (this stores your email), open Outreach, click "Send me this week's now".
@@ -61,6 +61,5 @@ Owners are picked up the next time they sign in after this deploy (that's when t
 ## Known limits (v1)
 
 - One send time for every gym (Monday 13:00 UTC), not each gym's local morning.
-- The email doesn't show the gym's name: there's no gym-name setting yet.
 - Each gym's data is read with two table Scans; fine at beta size, same as the rest of the Lambda.
 - Turning the email off is a dashboard checkbox; there's no one-click unsubscribe link in the email yet.

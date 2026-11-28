@@ -47,7 +47,7 @@ function scoreOf(profile, ai) {
 // roster and nothing happened this week (nothing worth emailing).
 //   memberItems   – the gym's pulseretain-members items ({ rawMemberId, profile, aiResult })
 //   outreachItems – the gym's pulseretain-outreach items (outreach, sendlog, conversation, followup…)
-export function buildWeeklyReport({ memberItems = [], outreachItems = [], now = new Date(), timezone = "America/New_York" }) {
+export function buildWeeklyReport({ memberItems = [], outreachItems = [], now = new Date(), timezone = "America/New_York", gymName = "" }) {
   const end = now.toISOString();
   const start = new Date(now.getTime() - 7 * DAY_MS).toISOString();
 
@@ -103,7 +103,7 @@ export function buildWeeklyReport({ memberItems = [], outreachItems = [], now = 
   if (roster.length === 0 && activity === 0) return null;
 
   return {
-    weekId: isoWeekId(now), start, end, timezone,
+    weekId: isoWeekId(now), start, end, timezone, gymName: String(gymName || "").trim().slice(0, 80),
     rangeLabel: rangeLabel(new Date(start), new Date(now.getTime() - 1), timezone),
     rosterSize: roster.length,
     revenueAtRisk, highCount: high.length, mediumCount: medium.length,
@@ -190,7 +190,7 @@ export function renderWeeklyReportHtml(r, { dashboardUrl = DEFAULT_DASHBOARD_URL
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:600px;background:#ffffff;border-radius:14px;overflow:hidden;border:1px solid ${C.line};">
   <tr><td style="background:${C.ink};padding:20px 24px;">
     <span style="font-family:${SERIF};font-size:22px;color:#ffffff;">PulseRetain</span>
-    <span style="font-family:${SANS};font-size:13px;color:#c9c9d6;padding-left:10px;">Weekly retention report</span>
+    <span style="font-family:${SANS};font-size:13px;color:#c9c9d6;padding-left:10px;">Weekly retention report${r.gymName ? ` for ${esc(r.gymName)}` : ""}</span>
   </td></tr>
   <tr><td style="height:4px;line-height:4px;font-size:0;background:${C.purple};background-image:linear-gradient(90deg,${C.purple},${C.orange});">&nbsp;</td></tr>
 
@@ -232,7 +232,7 @@ export function renderWeeklyReportHtml(r, { dashboardUrl = DEFAULT_DASHBOARD_URL
 
 export function renderWeeklyReportText(r, { dashboardUrl = DEFAULT_DASHBOARD_URL } = {}) {
   const lines = [
-    `PulseRetain weekly retention report (${r.rangeLabel})`,
+    `PulseRetain weekly retention report${r.gymName ? ` for ${r.gymName}` : ""} (${r.rangeLabel})`,
     "",
     `Revenue at risk: ${money(r.revenueAtRisk)}/month (${r.highCount} high-risk, ${r.mediumCount} slipping)`,
     `Revenue saved: ${money(r.savedAnnual)} a year (${money(r.savedMonthly)}/mo)`,
@@ -262,7 +262,7 @@ export async function processWeeklyReports(gyms, now, deps) {
     if (gym.lastReportWeek === weekId) { summary.alreadySent++; continue; }
     try {
       const data = await deps.loadGymData(gym.tenantId);
-      const report = buildWeeklyReport({ ...data, now, timezone: gym.timezone || undefined });
+      const report = buildWeeklyReport({ ...data, now, timezone: gym.timezone || undefined, gymName: gym.gymName });
       if (!report) { summary.skippedEmpty++; continue; }
       if (!(await deps.claimWeek(gym, weekId))) { summary.alreadySent++; continue; }
       try {

@@ -7,8 +7,10 @@ import { buildStats, deriveRisk, isDemoPhone, pickTodaysQueue } from "./retentio
 import { parseMembersCSV, SAMPLE_CSV_HEADERS, SAMPLE_CSV_ROWS, SAMPLE_GYM_CSV } from "./importMembers";
 import { isStableId, newMemberId, withStableIds, normalizeMemberId, restoreResults } from "./memberStore";
 import { computeInsights } from "./strategist";
-import { IS_DEMO, exitDemoToSignUp, demoAnalyze, demoDraftReply, demoGetConversation, demoLogReplySent, demoCompetitiveIntel, demoInitialAiResults, demoInitialOutreach, demoInbox, demoMarkReplyHandled } from "./demo";
+import { IS_DEMO, DEMO_GYM, DEMO_MEMBERS, demoUrl, enterDemo, resetDemo, exitDemoToSignUp, demoAnalyze, demoDraftReply, demoGetConversation, demoLogReplySent, demoCompetitiveIntel, demoInitialAiResults, demoInitialOutreach, demoInbox, demoMarkReplyHandled } from "./demo";
 import { listLocations, filterByLocation, summarizeLocations, ALL_LOCATIONS } from "./locations";
+import Onboarding from "./Onboarding";
+import { shouldShowOnboarding, wantsSignUp, applyDefaultPrice } from "./gymSetup";
 import { aiErrorText } from "./aiErrors";
 import { useState, useMemo, useEffect, useRef, useCallback } from "react";
 
@@ -127,6 +129,9 @@ const initialMembers = [
   { id: 9,  name: "Camille Torres",  initials: "CT", plan: "Unlimited Monthly", lastVisit: "11 days ago", usualVisits: "Wed & Fri",      risk: "high",   score: 88, value: 79,  email: "c.torres@email.com", phone: "(704) 555-0338", joinedMonths: 11, missedPayments: 1, classesBooked: 0, location: "West End" },
   { id: 10, name: "Jordan Kim",      initials: "JK", plan: "Unlimited Monthly", lastVisit: "5 days ago",  usualVisits: "Tue & Thu",      risk: "medium", score: 61, value: 79,  email: "j.kim@email.com",    phone: "(704) 555-0491", joinedMonths: 8,  missedPayments: 0, classesBooked: 2, location: "West End" },
 ];
+
+// Demo mode opens on the fictional sample studio instead of the starter roster.
+const startingMembers = IS_DEMO ? DEMO_MEMBERS : initialMembers;
 
 // ─── Risk config ─────────────────────────────────────────────────────────────
 const riskConfig = {
@@ -394,16 +399,19 @@ const authComponents = {
     return (
       <div style={{ textAlign: "center", padding: "18px 20px 40px" }}>
         <p style={{ color: "#8a8ba8", fontSize: 12, margin: 0 }}>Member retention for fitness studios</p>
+        <button onClick={enterDemo} style={{ marginTop: 14, background: "none", border: "1px solid #4a4b6a", borderRadius: 8, padding: "8px 16px", color: "#e8e8f4", fontSize: 13, cursor: "pointer" }}>
+          Try the demo with a sample studio
+        </button>
       </div>
     );
   },
 };
 
 // Demo mode skips sign-in entirely; everyone else gets the normal Cognito login.
-const DEMO_USER = { signInDetails: { loginId: "Demo gym · sample data" } };
+const DEMO_USER = { signInDetails: { loginId: `${DEMO_GYM.name} · sample data` } };
 function AuthGate({ children }) {
   if (IS_DEMO) return children({ signOut: exitDemoToSignUp, user: DEMO_USER });
-  return <Authenticator components={authComponents}>{children}</Authenticator>;
+  return <Authenticator components={authComponents} initialState={wantsSignUp() ? "signUp" : "signIn"}>{children}</Authenticator>;
 }
 
 // ─── Design tokens (minimal look: brand navy + red, lots of white) ──────────
@@ -538,7 +546,7 @@ export default function App() {
     setInstallDismissed(true);
     try { localStorage.setItem("pulseretain-install-dismissed", "1"); } catch { /* private mode */ }
   }
-  const [members, setMembers]         = useState(initialMembers);
+  const [members, setMembers]         = useState(startingMembers);
   const [usingImported, setUsingImported] = useState(false);
   const importInputRef                = useRef(null);
   const [showData, setShowData]       = useState(false);    // "Add members" modal
@@ -547,7 +555,7 @@ export default function App() {
   const blankMember = { name: "", plan: "", value: "", lastVisit: "", joinDate: "", missedPayments: "", classesBooked: "", schedule: "", email: "", phone: "", location: "" };
   const [addForm, setAddForm]         = useState(blankMember);
   const [selected, setSelected]       = useState(null);
-  const [aiResults, setAiResults]     = useState(() => (IS_DEMO ? demoInitialAiResults(initialMembers) : {}));
+  const [aiResults, setAiResults]     = useState(() => (IS_DEMO ? demoInitialAiResults(startingMembers) : {}));
   const [loading, setLoading]         = useState({});
   const [analyzing, setAnalyzing]     = useState(false);
   const [activeTab, setActiveTab]     = useState("Today");
@@ -560,6 +568,9 @@ export default function App() {
   const [gymTz, setGymTz]               = useState(null); // gym's time zone (quiet hours + follow-up timing)
   const [reportPrefs, setReportPrefs]   = useState(null); // { weeklyReport, reportEmail } for the Monday email
   const [testReportBusy, setTestReportBusy] = useState(false);
+  const [gymProfile, setGymProfile]     = useState(null); // { gymName, avgPrice, onboardedAt } from first-run setup
+  const [savedCounts, setSavedCounts]   = useState(null); // { members, outreach } on the server at sign-in
+  const [onboarding, setOnboarding]     = useState(null); // null = undecided, "open", "closed"
   const [smsSending, setSmsSending]   = useState({});
   const [smsSent, setSmsSent]         = useState(new Set());
   const [intel, setIntel]             = useState(null);   // competitive-intel aggregate
@@ -590,6 +601,10 @@ export default function App() {
         const res  = await apiFetch({ action: "load_data" });
         const data = await res.json();
         if (cancelled) return;
+        if (res.ok) setSavedCounts({
+          members:  Array.isArray(data.members) ? data.members.length : 0,
+          outreach: Array.isArray(data.outreachLogs) ? data.outreachLogs.length : 0,
+        });
 
         // Restore the saved roster and its analyses. Results for members who
         // aren't on the saved roster (e.g. old ones keyed 1, 2, 3) are dropped,
@@ -648,6 +663,7 @@ export default function App() {
         }
         if (!cancelled) setGymTz(tz || settings.effectiveTimezone || null);
         if (!cancelled && typeof settings.weeklyReport === "boolean") setReportPrefs({ weeklyReport: settings.weeklyReport, reportEmail: settings.reportEmail || null });
+        if (!cancelled && "onboardedAt" in settings) setGymProfile({ gymName: settings.gymName, avgPrice: settings.avgPrice, onboardedAt: settings.onboardedAt, timezone: tz });
         const { followups = [] } = await (await apiFetch({ action: "list_followups" })).json();
         if (cancelled) return;
         const pending = followups.filter(f => f.status === "scheduled" || f.status === "sending");
@@ -698,6 +714,32 @@ export default function App() {
     } finally {
       setTestReportBusy(false);
     }
+  }
+
+  // ── First-run setup for brand-new gyms ────────────────────────────────────
+  // Decided once, after both the roster and the gym profile have loaded. Gyms
+  // with saved members or outreach (everyone from before onboarding existed)
+  // never see it. "#setup" in the address opens it again on purpose.
+  useEffect(() => {
+    if (IS_DEMO || onboarding !== null || dataLoading || !gymProfile || !savedCounts) return;
+    const forced = /^#\/?setup\b/.test(window.location.hash);
+    setOnboarding(forced || shouldShowOnboarding({ profile: gymProfile, hasSavedRoster: savedCounts.members > 0, hasOutreach: savedCounts.outreach > 0 }) ? "open" : "closed");
+  }, [onboarding, dataLoading, gymProfile, savedCounts]);
+
+  async function saveGymProfile(payload) {
+    const r = await apiFetch({ action: "save_gym_profile", ...payload });
+    if (!r.ok) throw await serverError(r);
+    const settings = await r.json();
+    setGymProfile(p => ({ ...p, gymName: settings.gymName, avgPrice: settings.avgPrice, onboardedAt: settings.onboardedAt }));
+    if (settings.timezone) setGymTz(settings.timezone);
+    return settings;
+  }
+  async function closeOnboarding(flag) {
+    try { await saveGymProfile({ [flag]: true }); }
+    catch (err) { console.error("Couldn't record setup state:", err); }
+    if (window.location.hash.replace(/^#\/?/, "").startsWith("setup")) window.history.replaceState(null, "", window.location.pathname + window.location.search);
+    setOnboarding("closed");
+    if (flag === "complete") setActiveTab("Today");
   }
 
   // ── Load a member's conversation thread when their row is expanded ────────
@@ -784,7 +826,7 @@ export default function App() {
   // ── Bring in a real member roster (parsed entirely in-browser) ─────────────
   // Replace the whole roster and reset the view so trends reflect it at once.
   function applyRoster(parsed, label) {
-    const list = withStableIds(parsed);
+    const list = withStableIds(applyDefaultPrice(parsed, gymProfile?.avgPrice).members);
     setMembers(list);
     setUsingImported(true);
     setSelected(null);
@@ -794,9 +836,9 @@ export default function App() {
     setShowData(false);
     setActiveTab("Today");
     showToast(`Loaded ${list.length} members${label ? ` · ${label}` : ""}`);
-    saveRoster(list, "replace")
-      .then(ok => { if (!ok) showToast("Roster loaded, but the server can't save it yet. It will reset on reload."); })
-      .catch(err => showToast(`Roster loaded but not saved: ${err.message}`));
+    return saveRoster(list, "replace")
+      .then(ok => { if (!ok) showToast("Roster loaded, but the server can't save it yet. It will reset on reload."); return ok; })
+      .catch(err => { showToast(`Roster loaded but not saved: ${err.message}`); return false; });
   }
 
   function loadSampleGym() {
@@ -853,10 +895,10 @@ export default function App() {
   function resetToDemo() {
     if (!IS_DEMO && !window.confirm("Remove your saved roster and go back to the demo members? Saved analyses for these members are deleted too.")) return;
     clearSavedRoster().catch(err => showToast(`Couldn't remove the saved roster: ${err.message}`));
-    setMembers(initialMembers);
+    setMembers(startingMembers);
     setUsingImported(false);
     setSelected(null);
-    setAiResults({});
+    setAiResults(IS_DEMO ? demoInitialAiResults(startingMembers) : {});
     showToast("Restored the demo roster");
   }
 
@@ -1326,6 +1368,17 @@ export default function App() {
             </div>
           )}
 
+          {/* ── First-run setup (new gyms) ── */}
+          {onboarding === "open" && !dataLoading && (
+            <Onboarding isMobile={isMobile} ui={{ T, btn, SERIF, SANS, Logo }}
+              initialProfile={{ ...gymProfile, timezone: gymTz }}
+              onSaveProfile={(profile) => saveGymProfile({ profile })}
+              onRoster={(list, label) => applyRoster(list, label)}
+              onDownloadTemplate={downloadImportTemplate}
+              onFinish={() => closeOnboarding("complete")}
+              onSkip={() => closeOnboarding("skipped")} />
+          )}
+
           {/* ── Header ── */}
           <header style={{ background: "#fff", borderBottom: `1px solid ${T.line}`, position: "sticky", top: 0, zIndex: 100 }}>
             <div style={{ maxWidth: 1120, margin: "0 auto", padding: `0 ${pad}`, display: "flex", alignItems: "center", gap: isMobile ? 12 : 40, height: 60 }}>
@@ -1345,6 +1398,10 @@ export default function App() {
               )}
               <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 14 }}>
                 {!isMobile && <span style={{ fontSize: 13, color: T.faint }}>{user?.signInDetails?.loginId}</span>}
+                {!IS_DEMO && (
+                  <a href={demoUrl()} target="_blank" rel="noopener noreferrer" title="Opens a sample studio in a new tab. Your members and data are not touched."
+                    style={{ fontSize: 13, color: T.purple, textDecoration: "none", fontWeight: 500 }}>Demo mode</a>
+                )}
                 <button onClick={signOut} style={btn("secondary", { padding: "6px 12px", fontWeight: 500 })}>{IS_DEMO ? "Sign up" : "Sign out"}</button>
               </div>
             </div>
@@ -1364,7 +1421,8 @@ export default function App() {
           {/* ── Demo note (public no-login demo) ── */}
           {IS_DEMO && (
             <div role="note" style={{ background: T.soft, borderBottom: `1px solid ${T.line}`, padding: `9px ${pad}`, fontSize: 13, color: T.muted, textAlign: "center", lineHeight: 1.5 }}>
-              You're viewing a demo gym with sample members. No texts are sent.{" "}
+              Demo mode: {DEMO_GYM.name} is a sample studio with made-up members. No texts are sent and nothing is saved.{" "}
+              <button onClick={resetDemo} style={{ background: "none", border: "none", padding: 0, marginRight: 12, fontFamily: SANS, fontSize: 13, color: T.ink, fontWeight: 600, textDecoration: "underline", cursor: "pointer" }}>Start over</button>
               <button onClick={exitDemoToSignUp} style={{ background: "none", border: "none", padding: 0, fontFamily: SANS, fontSize: 13, color: T.ink, fontWeight: 600, textDecoration: "underline", cursor: "pointer" }}>Sign up to use your own members</button>
             </div>
           )}
@@ -1386,7 +1444,7 @@ export default function App() {
                 {/* Page title + location picker */}
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap", marginBottom: isMobile ? 14 : 18 }}>
                   <p style={{ margin: 0, fontSize: 13, color: T.muted }}>
-                    {todayLabel} · {usingImported ? "Your roster" : "Pulse Studio"} · {scopedMembers.length} members{filterLocation !== ALL_LOCATIONS ? ` at ${filterLocation}` : ""}
+                    {todayLabel} · {usingImported ? (gymProfile?.gymName || "Your roster") : IS_DEMO ? DEMO_GYM.name : "Pulse Studio"} · {scopedMembers.length} members{filterLocation !== ALL_LOCATIONS ? ` at ${filterLocation}` : ""}
                     {usingImported && <button onClick={resetToDemo} style={{ marginLeft: 10, background: "none", border: "none", color: T.muted, fontSize: 13, cursor: "pointer", textDecoration: "underline", padding: 0 }}>Reset to demo</button>}
                   </p>
                   {locations.length > 1 && (
@@ -1971,6 +2029,7 @@ export default function App() {
 
                   <div style={{ marginTop: 22, paddingTop: 14, borderTop: `1px solid ${T.line}`, display: "flex", alignItems: "center", gap: 12 }}>
                     <button onClick={downloadImportTemplate} style={{ background: "none", color: T.ink, border: "none", fontFamily: SANS, fontSize: 13, cursor: "pointer", textDecoration: "underline", padding: 0 }}>Download CSV template</button>
+                    {!IS_DEMO && gymProfile && <button onClick={() => { setShowData(false); setOnboarding("open"); }} style={{ background: "none", color: T.ink, border: "none", fontFamily: SANS, fontSize: 13, cursor: "pointer", textDecoration: "underline", padding: 0 }}>Guided setup</button>}
                     {usingImported && <button onClick={resetToDemo} style={{ marginLeft: "auto", background: "none", color: T.muted, border: "none", fontFamily: SANS, fontSize: 13, cursor: "pointer", textDecoration: "underline", padding: 0 }}>Reset to demo roster</button>}
                   </div>
                 </div>
