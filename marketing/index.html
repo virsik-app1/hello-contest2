@@ -1,0 +1,367 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>PulseRetain | Member retention for gyms and boutique studios</title>
+  <meta name="description" content="PulseRetain scores every member's churn risk, texts the ones who are slipping, handles their replies and follows up, so fewer members quietly cancel. 14-day free trial.">
+  <meta name="theme-color" content="#1a1a2e">
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="PulseRetain | Keep the members you already have">
+  <meta property="og:description" content="See how much revenue your gym loses to churn each month, and win more of it back by text.">
+  <link rel="icon" type="image/svg+xml" href="icon.svg">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <a class="skip" href="#main">Skip to content</a>
+
+  <header class="nav">
+    <div class="wrap nav-inner">
+      <a class="brand" href="#top" aria-label="PulseRetain home">
+        <img src="icon.svg" alt="" width="28" height="28">
+        <span>PulseRetain</span>
+      </a>
+      <nav class="nav-links" aria-label="Main">
+        <a href="#roi">Calculator</a>
+        <a href="#features">Features</a>
+        <a href="#pricing">Pricing</a>
+        <a class="nav-signin" href="https://main.d2yk3ai4m6puu9.amplifyapp.com">Sign in</a>
+        <a class="btn btn-primary btn-sm" href="#demo">Book a demo</a>
+      </nav>
+    </div>
+  </header>
+
+  <main id="main">
+    <!-- Hero -->
+    <section class="hero" id="top">
+      <div class="wrap hero-grid">
+        <div class="hero-copy">
+          <p class="eyebrow">Member retention for gyms and boutique studios</p>
+          <h1>Know who is about to quit. <span class="accent-text">Win them back by text.</span></h1>
+          <p class="lede">PulseRetain scores every member's churn risk, writes a personal text to the ones who are slipping, handles their replies and follows up on its own. You see the revenue at risk each morning and approve what goes out.</p>
+          <div class="hero-ctas">
+            <a class="btn btn-primary" href="#demo">Book a demo</a>
+            <a class="btn btn-ghost" href="#roi">Calculate your churn cost</a>
+          </div>
+          <p class="fine"><a href="https://main.d2yk3ai4m6puu9.amplifyapp.com/?signup">Start a 14-day free trial</a>, no credit card needed. <a href="https://main.d2yk3ai4m6puu9.amplifyapp.com/#demo">Try the live demo</a> with sample members, no sign-up.</p>
+        </div>
+
+        <!-- Product preview, built in HTML so it stays sharp. Sample data. -->
+        <div class="preview" aria-label="Preview of the PulseRetain dashboard with sample members">
+          <div class="preview-top">
+            <div>
+              <div class="preview-label">Revenue at risk this month</div>
+              <div class="preview-money">$1,284</div>
+            </div>
+            <div class="preview-chip">5 members to reach today</div>
+          </div>
+          <ul class="preview-list">
+            <li><span class="avatar">SR</span><span class="who"><b>Sarah R.</b><small>No visit in 9 days, usually Tue and Thu</small></span><span class="score score-red">91</span></li>
+            <li><span class="avatar">CT</span><span class="who"><b>Camille T.</b><small>11 days out, 1 missed payment</small></span><span class="score score-red">88</span></li>
+            <li><span class="avatar">JK</span><span class="who"><b>Jordan K.</b><small>Bookings down from 4 to 2 a week</small></span><span class="score score-amber">61</span></li>
+          </ul>
+          <div class="preview-sms">
+            <div class="sms-label">Drafted text, waiting for your OK</div>
+            <p>Hi Sarah, we missed you at Tuesday's 6pm class. Everything OK? Your spot is saved for Thursday if you want it.</p>
+          </div>
+          <p class="preview-note">Sample data</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- ROI calculator -->
+    <section class="section section-tint" id="roi">
+      <div class="wrap">
+        <div class="section-head">
+          <p class="eyebrow">Churn calculator</p>
+          <h2>What quiet cancellations cost you</h2>
+          <p>Put in your own numbers. Nothing is sent anywhere until you ask for a demo.</p>
+        </div>
+
+        <div class="roi">
+          <form class="roi-inputs" id="roi-form" novalidate>
+            <div class="field">
+              <label for="roi-members">Active members</label>
+              <input id="roi-members" name="members" type="number" inputmode="numeric" min="0" max="100000" step="1" value="400">
+            </div>
+            <div class="field">
+              <label for="roi-dues">Average monthly dues</label>
+              <div class="input-prefix"><span>$</span><input id="roi-dues" name="dues" type="number" inputmode="decimal" min="0" max="10000" step="1" value="80"></div>
+            </div>
+            <div class="field">
+              <div class="field-row"><label for="roi-churn">Members who cancel each month</label><output id="roi-churn-out" for="roi-churn">4%</output></div>
+              <input id="roi-churn" name="churnPct" type="range" min="1" max="10" step="0.5" value="4">
+              <p class="hint">Many studios see 3 to 6% a month. Use your own if you track it.</p>
+            </div>
+            <div class="field">
+              <div class="field-row"><label for="roi-save">Share of those you keep with outreach</label><output id="roi-save-out" for="roi-save">20%</output></div>
+              <input id="roi-save" name="savePct" type="range" min="5" max="50" step="5" value="20">
+              <p class="hint">Your assumption, not a promise. Start low.</p>
+            </div>
+          </form>
+
+          <div class="roi-results" aria-live="polite">
+            <div class="roi-loss">
+              <div class="roi-label">You're losing about</div>
+              <div class="roi-big" id="roi-lost-monthly">$1,280<span>/month</span></div>
+              <p id="roi-lost-detail">16 members cancel each month, and their dues stop with them. That one month of cancellations is $15,360 a year in dues.</p>
+            </div>
+            <div class="roi-save">
+              <div class="roi-label">Keep 20% of them and you hold on to</div>
+              <div class="roi-mid" id="roi-saved-monthly">$256<span>/month</span></div>
+              <p id="roi-plan-detail">The Growth plan is $199/month. Keeping 3 members a month covers it.</p>
+            </div>
+            <a class="btn btn-primary btn-block" href="#demo" id="roi-cta">Show me who is at risk</a>
+          </div>
+        </div>
+        <p class="footnote">How it's calculated: members × monthly cancellation rate × average dues. Yearly figure is that month's cancellations times 12 months of dues. Recovered revenue counts the first month only, so it understates the value of a member who stays.</p>
+      </div>
+    </section>
+
+    <!-- How it works -->
+    <section class="section" id="how">
+      <div class="wrap">
+        <div class="section-head">
+          <p class="eyebrow">How it works</p>
+          <h2>From a roster to members back in class</h2>
+        </div>
+        <ol class="steps">
+          <li>
+            <span class="step-n">1</span>
+            <h3>Bring your members in</h3>
+            <p>Upload a CSV export from Mindbody, Glofox or a spreadsheet. Your roster is saved to your account.</p>
+          </li>
+          <li>
+            <span class="step-n">2</span>
+            <h3>See who is slipping</h3>
+            <p>Every member gets a risk score from 0 to 100 based on visit gaps, their usual schedule, bookings, payments and tenure.</p>
+          </li>
+          <li>
+            <span class="step-n">3</span>
+            <h3>Reach out by text</h3>
+            <p>AI drafts a personal message for each at-risk member. You review it and send with one tap.</p>
+          </li>
+          <li>
+            <span class="step-n">4</span>
+            <h3>Handle the reply and follow up</h3>
+            <p>Replies land in your inbox with an answer already drafted. No reply? A follow-up goes out on the day you set.</p>
+          </li>
+        </ol>
+      </div>
+    </section>
+
+    <!-- Features -->
+    <section class="section section-tint" id="features">
+      <div class="wrap">
+        <div class="section-head">
+          <p class="eyebrow">Features</p>
+          <h2>Built for the owner who runs the front desk too</h2>
+        </div>
+        <div class="features">
+          <article class="feature">
+            <div class="feature-bar bar-red"></div>
+            <h3>Revenue at risk, first thing</h3>
+            <p>The dashboard opens on the dollars at risk this month and a short list of who to reach today, ranked by risk and value.</p>
+          </article>
+          <article class="feature">
+            <div class="feature-bar bar-purple"></div>
+            <h3>Risk scores you can read</h3>
+            <p>Red above 75, yellow from 35 to 75, green below 35, with the reasons behind each score in plain words.</p>
+          </article>
+          <article class="feature">
+            <div class="feature-bar bar-orange"></div>
+            <h3>Texts that sound like you</h3>
+            <p>Each message is written for that member's situation, not a mail-merge template. Edit anything before it sends.</p>
+          </article>
+          <article class="feature">
+            <div class="feature-bar bar-purple"></div>
+            <h3>Two-way replies</h3>
+            <p>When a member texts back, PulseRetain drafts your answer. You approve it, and the whole conversation stays in one place.</p>
+          </article>
+          <article class="feature">
+            <div class="feature-bar bar-orange"></div>
+            <h3>Automatic follow-ups</h3>
+            <p>Silence after the first text? A follow-up is scheduled for you and sent within quiet hours in your gym's time zone.</p>
+          </article>
+          <article class="feature">
+            <div class="feature-bar bar-red"></div>
+            <h3>Why members leave</h3>
+            <p>Reasons from member replies roll up into a short list of what's driving cancellations and what to fix first.</p>
+          </article>
+        </div>
+
+        <div class="trust">
+          <div>
+            <h3>Texting done by the rules</h3>
+            <p>Opt-out with STOP is honored automatically, the first text carries the opt-out notice, quiet hours are enforced and daily send limits keep you safe.</p>
+          </div>
+          <div>
+            <h3>You stay in control</h3>
+            <p>Nothing goes to a member without your approval, except the follow-ups you schedule yourself.</p>
+          </div>
+          <div>
+            <h3>Your data stays yours</h3>
+            <p>Each gym's members are kept separate behind its own login, and API keys never reach the browser.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Pricing -->
+    <section class="section" id="pricing">
+      <div class="wrap">
+        <div class="section-head">
+          <p class="eyebrow">Pricing</p>
+          <h2>Priced by the size of your roster</h2>
+          <p>Every plan includes every feature and a 14-day free trial. No credit card to start, cancel any time.</p>
+        </div>
+        <div class="plans">
+          <article class="plan" data-plan="starter">
+            <h3>Starter</h3>
+            <p class="plan-for">Up to 300 members</p>
+            <p class="price"><span class="amount">$99</span>/month</p>
+            <ul>
+              <li>Every feature included</li>
+              <li>Reply inbox and follow-ups</li>
+              <li>Multiple locations in one view</li>
+              <li>Email support</li>
+            </ul>
+            <a class="btn btn-ghost btn-block" href="https://main.d2yk3ai4m6puu9.amplifyapp.com/?signup">Start free trial</a>
+          </article>
+          <article class="plan plan-featured" data-plan="growth">
+            <p class="plan-tag">Most studios</p>
+            <h3>Growth</h3>
+            <p class="plan-for">Up to 1,000 members</p>
+            <p class="price"><span class="amount">$199</span>/month</p>
+            <ul>
+              <li>Every feature included</li>
+              <li>Reply inbox and follow-ups</li>
+              <li>Multiple locations in one view</li>
+              <li>Priority email support</li>
+            </ul>
+            <a class="btn btn-primary btn-block" href="https://main.d2yk3ai4m6puu9.amplifyapp.com/?signup">Start free trial</a>
+          </article>
+          <article class="plan" data-plan="pro">
+            <h3>Studio Pro</h3>
+            <p class="plan-for">Up to 5,000 members</p>
+            <p class="price"><span class="amount">$349</span>/month</p>
+            <ul>
+              <li>Every feature included</li>
+              <li>Reply inbox and follow-ups</li>
+              <li>Multiple locations in one view</li>
+              <li>Guided setup call with your roster</li>
+            </ul>
+            <a class="btn btn-ghost btn-block" href="https://main.d2yk3ai4m6puu9.amplifyapp.com/?signup">Start free trial</a>
+          </article>
+        </div>
+        <p class="plans-note">More than 5,000 members or a franchise group? <a href="#demo" data-pick="Custom">Talk to us</a>. Text messages are included.</p>
+      </div>
+    </section>
+
+    <!-- Demo request -->
+    <section class="section section-navy" id="demo">
+      <div class="wrap demo-grid">
+        <div class="demo-copy">
+          <h2>See your own at-risk members</h2>
+          <p>Book a 20-minute walkthrough. Bring a member export and we'll show you who is slipping and what the first texts would say.</p>
+          <ul class="demo-points">
+            <li>Set up with your roster during the call</li>
+            <li>No credit card, no contract</li>
+            <li>We'll reply within one business day</li>
+          </ul>
+        </div>
+
+        <form class="demo-form" id="demo-form" novalidate>
+          <div class="field">
+            <label for="d-name">Your name</label>
+            <input id="d-name" name="name" autocomplete="name" required maxlength="100">
+          </div>
+          <div class="field">
+            <label for="d-email">Work email</label>
+            <input id="d-email" name="email" type="email" autocomplete="email" required maxlength="200">
+          </div>
+          <div class="field">
+            <label for="d-gym">Gym or studio name</label>
+            <input id="d-gym" name="gym" autocomplete="organization" required maxlength="150">
+          </div>
+          <div class="field-pair">
+            <div class="field">
+              <label for="d-size">Active members</label>
+              <select id="d-size" name="size" required>
+                <option value="">Choose one</option>
+                <option>Under 100</option>
+                <option>100 to 300</option>
+                <option>300 to 1,000</option>
+                <option>1,000 to 5,000</option>
+                <option>More than 5,000</option>
+              </select>
+            </div>
+            <div class="field">
+              <label for="d-plan">Plan you're looking at</label>
+              <select id="d-plan" name="plan">
+                <option value="">Not sure yet</option>
+                <option>Starter</option>
+                <option>Growth</option>
+                <option>Studio Pro</option>
+                <option>Custom</option>
+              </select>
+            </div>
+          </div>
+          <!-- Spam trap: hidden from people, bots tend to fill it. -->
+          <div class="hp" aria-hidden="true">
+            <label for="d-website">Website</label>
+            <input id="d-website" name="website" tabindex="-1" autocomplete="off">
+          </div>
+          <p class="form-error" id="demo-error" role="alert" hidden></p>
+          <button class="btn btn-primary btn-block" type="submit" id="demo-submit">Request a demo</button>
+          <p class="form-fine">We use this only to contact you about PulseRetain.</p>
+        </form>
+
+        <div class="demo-done" id="demo-done" hidden tabindex="-1">
+          <h3>Thanks, we got it.</h3>
+          <p>We'll email you within one business day to set a time. Meanwhile, you can <a href="https://main.d2yk3ai4m6puu9.amplifyapp.com/#demo">click through the live demo</a>.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- FAQ -->
+    <section class="section" id="faq">
+      <div class="wrap narrow">
+        <div class="section-head"><h2>Questions owners ask</h2></div>
+        <details>
+          <summary>Does it work with Mindbody?</summary>
+          <p>Yes, through a member export: download a CSV from Mindbody (or Glofox, or any spreadsheet) and upload it. A direct, automatic Mindbody sync is in development.</p>
+        </details>
+        <details>
+          <summary>Do texts go out without me seeing them?</summary>
+          <p>No. You approve the first text and every reply. The only automatic texts are follow-ups you've scheduled, and you can cancel those any time.</p>
+        </details>
+        <details>
+          <summary>What number do the texts come from?</summary>
+          <p>A PulseRetain business number. Members can reply to it, and their replies show up in your inbox.</p>
+        </details>
+        <details>
+          <summary>What happens when the trial ends?</summary>
+          <p>Pick a plan to keep going. You're only charged if you choose one, since the trial never asks for a card.</p>
+        </details>
+      </div>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <div class="wrap footer-inner">
+      <div class="brand brand-footer"><img src="icon.svg" alt="" width="22" height="22"><span>PulseRetain</span></div>
+      <nav aria-label="Footer">
+        <a href="#roi">Calculator</a>
+        <a href="#pricing">Pricing</a>
+        <a href="#demo">Book a demo</a>
+        <a href="https://main.d2yk3ai4m6puu9.amplifyapp.com">Sign in</a>
+      </nav>
+      <p class="copy">&copy; <span id="year">2026</span> PulseRetain</p>
+    </div>
+  </footer>
+
+  <script src="roi.js"></script>
+  <script src="site.js"></script>
+</body>
+</html>
