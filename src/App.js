@@ -1,5 +1,5 @@
 import { Amplify } from "aws-amplify";
-import { fetchAuthSession } from "aws-amplify/auth";
+import { fetchAuthSession, getCurrentUser } from "aws-amplify/auth";
 import { Authenticator, useAuthenticator, ThemeProvider } from "@aws-amplify/ui-react";
 import "@aws-amplify/ui-react/styles.css";
 import { awsConfig } from "./aws-config";
@@ -12,6 +12,7 @@ import { listLocations, filterByLocation, summarizeLocations, ALL_LOCATIONS } fr
 import Onboarding from "./Onboarding";
 import { shouldShowOnboarding, wantsSignUp, applyDefaultPrice } from "./gymSetup";
 import { aiErrorText } from "./aiErrors";
+import BillingPage, { BillingBanner, billingBanner, DEMO_BILLING } from "./Billing";
 import { useState, useMemo, useEffect, useRef, useCallback } from "react";
 
 Amplify.configure(awsConfig);
@@ -586,6 +587,9 @@ export default function App() {
   const [inboxEdits, setInboxEdits]     = useState({});   // owner's edits to a drafted answer, keyed by member id
   const [inboxBusy, setInboxBusy]       = useState({});   // in-flight action per member id
   const waitingReplies = (inbox || []).filter(t => t.needsReply).length;
+  const [billing, setBilling]           = useState(() => (IS_DEMO ? DEMO_BILLING : null));
+  const [billingError, setBillingError] = useState(null);
+  const [billingBusy, setBillingBusy]   = useState(null); // tier id or "portal" while Stripe is opening
   const { authStatus } = useAuthenticator((c) => [c.authStatus]);
 
   // ── Load persisted data from DynamoDB once the user is signed in ──────────
@@ -643,6 +647,73 @@ export default function App() {
     loadData();
     return () => { cancelled = true; };
   }, [authStatus]);
+
+  // ── Billing status (Stripe) ───────────────────────────────────────────────
+  // An older Lambda without billing answers "Unknown action"; the app then just
+  // hides the banner and shows the error on the Billing page.
+  const loadBilling = useCallback(async () => {
+    if (IS_DEMO) return;
+    try {
+      const res = await apiFetch({ action: "get_billing" });
+      if (!res.ok) throw await serverError(res);
+      setBilling(await res.json());
+      setBillingError(null);
+    } catch (err) {
+      setBillingError(err.message);
+    }
+  }, []);
+  useEffect(() => {
+    if (IS_DEMO || authStatus !== "authenticated") return;
+    loadBilling();
+  }, [authStatus, loadBilling]);
+
+  // Coming back from Stripe Checkout or the portal: open Billing, say what
+  // happened, and tidy the address bar. The webhook can land a moment after
+  // the redirect, so status is fetched again shortly.
+  useEffect(() => {
+    if (IS_DEMO || authStatus !== "authenticated") return;
+    const params = new URLSearchParams(window.location.search);
+    const result = params.get("billing");
+    if (!result) return;
+    setActiveTab("Billing");
+    if (result === "success") showToast("Thanks, your plan is set up");
+    else if (result === "cancelled") showToast("Checkout cancelled. Nothing was charged.");
+    params.delete("billing");
+    const qs = params.toString();
+    window.history.replaceState(null, "", `${window.location.pathname}${qs ? `?${qs}` : ""}${window.location.hash}`);
+    const t = setTimeout(loadBilling, 4000);
+    return () => clearTimeout(t);
+  }, [authStatus, loadBilling]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  async function startCheckout(tierId) {
+    if (IS_DEMO) { exitDemoToSignUp(); return; }
+    setBillingBusy(tierId);
+    try {
+      let email;
+      try { email = (await getCurrentUser())?.signInDetails?.loginId; } catch { /* optional */ }
+      const res = await apiFetch({ action: "create_checkout_session", tier: tierId, email });
+      if (!res.ok) throw await serverError(res);
+      const { url } = await res.json();
+      window.location.assign(url);
+    } catch (err) {
+      showToast(`Couldn't open checkout: ${err.message}`);
+      setBillingBusy(null);
+    }
+  }
+  async function openPortal() {
+    if (IS_DEMO) return;
+    setBillingBusy("portal");
+    try {
+      const res = await apiFetch({ action: "create_portal_session" });
+      if (!res.ok) throw await serverError(res);
+      const { url } = await res.json();
+      window.location.assign(url);
+    } catch (err) {
+      showToast(`Couldn't open billing: ${err.message}`);
+      setBillingBusy(null);
+    }
+  }
+  const banner = activeTab === "Billing" ? null : billingBanner(billing);
 
   // ── Gym time zone + pending follow-ups ────────────────────────────────────
   // GUESS: a gym that has never chosen a time zone gets the owner's browser zone
@@ -1368,6 +1439,8 @@ export default function App() {
               )}
               <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 14 }}>
                 {!isMobile && <span style={{ fontSize: 13, color: T.faint }}>{user?.signInDetails?.loginId}</span>}
+                <button onClick={() => setActiveTab("Billing")} aria-current={activeTab === "Billing" ? "page" : undefined}
+                  style={btn(activeTab === "Billing" ? "primary" : "ghost", { padding: "6px 10px", fontWeight: 500 })}>Billing</button>
                 {!IS_DEMO && (
                   <a href={demoUrl()} target="_blank" rel="noopener noreferrer" title="Opens a sample studio in a new tab. Your members and data are not touched."
                     style={{ fontSize: 13, color: T.purple, textDecoration: "none", fontWeight: 500 }}>Demo mode</a>
@@ -1397,6 +1470,10 @@ export default function App() {
             </div>
           )}
 
+          {/* ── Trial / payment banner ── */}
+          <BillingBanner banner={banner} pad={pad} ui={{ T, btn, SANS }}
+            onAction={() => (banner?.action === "portal" ? openPortal() : setActiveTab("Billing"))} />
+
           {/* ── Toast ── */}
           {toast && (
             <div role="status" aria-live="polite" style={{ position: "fixed", bottom: 28, left: "50%", transform: "translateX(-50%)", background: T.ink, color: "#fff", padding: "10px 18px", borderRadius: 8, fontSize: 13, zIndex: 9999, width: "max-content", maxWidth: "calc(100vw - 32px)", boxSizing: "border-box", textAlign: "center" }}>
@@ -1409,6 +1486,12 @@ export default function App() {
             {/* ════════════════════════════════════════════════════════════
                 TAB: TODAY  (revenue at risk → who to text → everyone else)
             ════════════════════════════════════════════════════════════ */}
+            {activeTab === "Billing" && (
+              <BillingPage billing={billing} error={billing ? null : billingError} busy={billingBusy}
+                onCheckout={startCheckout} onPortal={openPortal} onRetry={loadBilling} isMobile={isMobile}
+                ui={{ T, btn, SERIF, eyebrow, panel, accentPanel, SectionHead }} />
+            )}
+
             {activeTab === "Today" && (
               <>
                 {/* Page title + location picker */}
