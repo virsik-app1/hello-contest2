@@ -13,7 +13,7 @@ export const IS_DEMO = isDemoMode();
 
 // Leave the demo for the real sign-in / sign-up screen (same page, no hash).
 export function exitDemoToSignUp() {
-  window.location.replace(window.location.origin + window.location.pathname);
+  window.location.replace(window.location.origin + window.location.pathname + "?signup");
 }
 
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
