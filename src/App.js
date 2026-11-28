@@ -9,6 +9,8 @@ import { isStableId, newMemberId, withStableIds, normalizeMemberId, restoreResul
 import { computeInsights } from "./strategist";
 import { IS_DEMO, DEMO_GYM, DEMO_MEMBERS, demoUrl, enterDemo, resetDemo, exitDemoToSignUp, demoAnalyze, demoDraftReply, demoGetConversation, demoLogReplySent, demoCompetitiveIntel, demoInitialAiResults, demoInitialOutreach, demoInbox, demoMarkReplyHandled } from "./demo";
 import { listLocations, filterByLocation, summarizeLocations, ALL_LOCATIONS } from "./locations";
+import Onboarding from "./Onboarding";
+import { shouldShowOnboarding, wantsSignUp, applyDefaultPrice } from "./gymSetup";
 import { aiErrorText } from "./aiErrors";
 import { useState, useMemo, useEffect, useRef, useCallback } from "react";
 
@@ -409,7 +411,7 @@ const authComponents = {
 const DEMO_USER = { signInDetails: { loginId: `${DEMO_GYM.name} · sample data` } };
 function AuthGate({ children }) {
   if (IS_DEMO) return children({ signOut: exitDemoToSignUp, user: DEMO_USER });
-  return <Authenticator components={authComponents}>{children}</Authenticator>;
+  return <Authenticator components={authComponents} initialState={wantsSignUp() ? "signUp" : "signIn"}>{children}</Authenticator>;
 }
 
 // ─── Design tokens (minimal look: brand navy + red, lots of white) ──────────
@@ -564,6 +566,9 @@ export default function App() {
   const [scheduledIds, setScheduledIds] = useState(new Set());
   const [followupDue, setFollowupDue]   = useState({});   // member id → ISO time the follow-up text goes out
   const [gymTz, setGymTz]               = useState(null); // gym's time zone (quiet hours + follow-up timing)
+  const [gymProfile, setGymProfile]     = useState(null); // { gymName, avgPrice, onboardedAt } from first-run setup
+  const [savedCounts, setSavedCounts]   = useState(null); // { members, outreach } on the server at sign-in
+  const [onboarding, setOnboarding]     = useState(null); // null = undecided, "open", "closed"
   const [smsSending, setSmsSending]   = useState({});
   const [smsSent, setSmsSent]         = useState(new Set());
   const [intel, setIntel]             = useState(null);   // competitive-intel aggregate
@@ -594,6 +599,10 @@ export default function App() {
         const res  = await apiFetch({ action: "load_data" });
         const data = await res.json();
         if (cancelled) return;
+        if (res.ok) setSavedCounts({
+          members:  Array.isArray(data.members) ? data.members.length : 0,
+          outreach: Array.isArray(data.outreachLogs) ? data.outreachLogs.length : 0,
+        });
 
         // Restore the saved roster and its analyses. Results for members who
         // aren't on the saved roster (e.g. old ones keyed 1, 2, 3) are dropped,
@@ -651,6 +660,7 @@ export default function App() {
           tz = r.ok ? browserTz : settings.effectiveTimezone;
         }
         if (!cancelled) setGymTz(tz || settings.effectiveTimezone || null);
+        if (!cancelled && "onboardedAt" in settings) setGymProfile({ gymName: settings.gymName, avgPrice: settings.avgPrice, onboardedAt: settings.onboardedAt, timezone: tz });
         const { followups = [] } = await (await apiFetch({ action: "list_followups" })).json();
         if (cancelled) return;
         const pending = followups.filter(f => f.status === "scheduled" || f.status === "sending");
@@ -674,6 +684,32 @@ export default function App() {
       setGymTz(prev);
       showToast(`Couldn't save time zone: ${err.message}`);
     }
+  }
+
+  // ── First-run setup for brand-new gyms ────────────────────────────────────
+  // Decided once, after both the roster and the gym profile have loaded. Gyms
+  // with saved members or outreach (everyone from before onboarding existed)
+  // never see it. "#setup" in the address opens it again on purpose.
+  useEffect(() => {
+    if (IS_DEMO || onboarding !== null || dataLoading || !gymProfile || !savedCounts) return;
+    const forced = /^#\/?setup\b/.test(window.location.hash);
+    setOnboarding(forced || shouldShowOnboarding({ profile: gymProfile, hasSavedRoster: savedCounts.members > 0, hasOutreach: savedCounts.outreach > 0 }) ? "open" : "closed");
+  }, [onboarding, dataLoading, gymProfile, savedCounts]);
+
+  async function saveGymProfile(payload) {
+    const r = await apiFetch({ action: "save_gym_profile", ...payload });
+    if (!r.ok) throw await serverError(r);
+    const settings = await r.json();
+    setGymProfile(p => ({ ...p, gymName: settings.gymName, avgPrice: settings.avgPrice, onboardedAt: settings.onboardedAt }));
+    if (settings.timezone) setGymTz(settings.timezone);
+    return settings;
+  }
+  async function closeOnboarding(flag) {
+    try { await saveGymProfile({ [flag]: true }); }
+    catch (err) { console.error("Couldn't record setup state:", err); }
+    if (window.location.hash.replace(/^#\/?/, "").startsWith("setup")) window.history.replaceState(null, "", window.location.pathname + window.location.search);
+    setOnboarding("closed");
+    if (flag === "complete") setActiveTab("Today");
   }
 
   // ── Load a member's conversation thread when their row is expanded ────────
@@ -760,7 +796,7 @@ export default function App() {
   // ── Bring in a real member roster (parsed entirely in-browser) ─────────────
   // Replace the whole roster and reset the view so trends reflect it at once.
   function applyRoster(parsed, label) {
-    const list = withStableIds(parsed);
+    const list = withStableIds(applyDefaultPrice(parsed, gymProfile?.avgPrice).members);
     setMembers(list);
     setUsingImported(true);
     setSelected(null);
@@ -770,9 +806,9 @@ export default function App() {
     setShowData(false);
     setActiveTab("Today");
     showToast(`Loaded ${list.length} members${label ? ` · ${label}` : ""}`);
-    saveRoster(list, "replace")
-      .then(ok => { if (!ok) showToast("Roster loaded, but the server can't save it yet. It will reset on reload."); })
-      .catch(err => showToast(`Roster loaded but not saved: ${err.message}`));
+    return saveRoster(list, "replace")
+      .then(ok => { if (!ok) showToast("Roster loaded, but the server can't save it yet. It will reset on reload."); return ok; })
+      .catch(err => { showToast(`Roster loaded but not saved: ${err.message}`); return false; });
   }
 
   function loadSampleGym() {
@@ -1302,6 +1338,17 @@ export default function App() {
             </div>
           )}
 
+          {/* ── First-run setup (new gyms) ── */}
+          {onboarding === "open" && !dataLoading && (
+            <Onboarding isMobile={isMobile} ui={{ T, btn, SERIF, SANS, Logo }}
+              initialProfile={{ ...gymProfile, timezone: gymTz }}
+              onSaveProfile={(profile) => saveGymProfile({ profile })}
+              onRoster={(list, label) => applyRoster(list, label)}
+              onDownloadTemplate={downloadImportTemplate}
+              onFinish={() => closeOnboarding("complete")}
+              onSkip={() => closeOnboarding("skipped")} />
+          )}
+
           {/* ── Header ── */}
           <header style={{ background: "#fff", borderBottom: `1px solid ${T.line}`, position: "sticky", top: 0, zIndex: 100 }}>
             <div style={{ maxWidth: 1120, margin: "0 auto", padding: `0 ${pad}`, display: "flex", alignItems: "center", gap: isMobile ? 12 : 40, height: 60 }}>
@@ -1367,7 +1414,7 @@ export default function App() {
                 {/* Page title + location picker */}
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap", marginBottom: isMobile ? 14 : 18 }}>
                   <p style={{ margin: 0, fontSize: 13, color: T.muted }}>
-                    {todayLabel} · {usingImported ? "Your roster" : IS_DEMO ? DEMO_GYM.name : "Pulse Studio"} · {scopedMembers.length} members{filterLocation !== ALL_LOCATIONS ? ` at ${filterLocation}` : ""}
+                    {todayLabel} · {usingImported ? (gymProfile?.gymName || "Your roster") : IS_DEMO ? DEMO_GYM.name : "Pulse Studio"} · {scopedMembers.length} members{filterLocation !== ALL_LOCATIONS ? ` at ${filterLocation}` : ""}
                     {usingImported && <button onClick={resetToDemo} style={{ marginLeft: 10, background: "none", border: "none", color: T.muted, fontSize: 13, cursor: "pointer", textDecoration: "underline", padding: 0 }}>Reset to demo</button>}
                   </p>
                   {locations.length > 1 && (
@@ -1939,6 +1986,7 @@ export default function App() {
 
                   <div style={{ marginTop: 22, paddingTop: 14, borderTop: `1px solid ${T.line}`, display: "flex", alignItems: "center", gap: 12 }}>
                     <button onClick={downloadImportTemplate} style={{ background: "none", color: T.ink, border: "none", fontFamily: SANS, fontSize: 13, cursor: "pointer", textDecoration: "underline", padding: 0 }}>Download CSV template</button>
+                    {!IS_DEMO && gymProfile && <button onClick={() => { setShowData(false); setOnboarding("open"); }} style={{ background: "none", color: T.ink, border: "none", fontFamily: SANS, fontSize: 13, cursor: "pointer", textDecoration: "underline", padding: 0 }}>Guided setup</button>}
                     {usingImported && <button onClick={resetToDemo} style={{ marginLeft: "auto", background: "none", color: T.muted, border: "none", fontFamily: SANS, fontSize: 13, cursor: "pointer", textDecoration: "underline", padding: 0 }}>Reset to demo roster</button>}
                   </div>
                 </div>
