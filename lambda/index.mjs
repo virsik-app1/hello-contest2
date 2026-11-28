@@ -9,6 +9,7 @@ import { cleanGymProfile, buildProfileUpdate, profileFromItem } from "./onboardi
 import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
 import { DynamoDBDocumentClient, PutCommand, GetCommand, ScanCommand, UpdateCommand, BatchWriteCommand } from "@aws-sdk/lib-dynamodb";
 import { SESClient, SendEmailCommand } from "@aws-sdk/client-ses";
+import { REPORT_JOB, DEFAULT_DASHBOARD_URL, buildWeeklyReport, weeklyReportSubject, renderWeeklyReportHtml, renderWeeklyReportText, processWeeklyReports } from "./weeklyReport.mjs";
 import { isAllowedSmsDestination, cleanLead, cleanOutreachLog, isSafeMemberId, OUTREACH_STATUSES, windowKey, clientIp, safeErrorMessage, emitMetric } from "./security.mjs";
 import { DEFAULT_TZ, isValidTimeZone, isQuietHoursIn, computeDueAt, clampFollowUpDays, defaultFollowUpText, followupKey, settingsKey, processDueFollowups } from "./followups.mjs";
 
@@ -22,6 +23,11 @@ const LEADS_TABLE    = "pulseretain-leads";
 const ses = new SESClient({ region: "us-east-1" });
 // IMPORTANT: this must be YOUR verified email address from SES
 const NOTIFY_EMAIL = process.env.NOTIFY_EMAIL;
+// Weekly owner report: the From address must be an SES-verified identity (an
+// address or, better, a whole domain). Falls back to NOTIFY_EMAIL if unset.
+const REPORT_FROM_EMAIL = process.env.REPORT_FROM_EMAIL || NOTIFY_EMAIL;
+const DASHBOARD_URL     = process.env.DASHBOARD_URL || DEFAULT_DASHBOARD_URL;
+const DAILY_TEST_REPORT_LIMIT = 3;
 
 // ─── CORS headers ─────────────────────────────────────────────────────────────
 const CORS = {
@@ -904,9 +910,45 @@ async function getGymTimeZone(tenantId) {
   tzCache.set(tenantId, { tz, at: Date.now() });
   return tz;
 }
-async function getGymSettings(tenantId) {
+async function getGymSettings(tenantId, authHeader) {
   const r = await dynamo.send(new GetCommand({ TableName: OUTREACH_TABLE, Key: { logID: settingsKey(tenantId) } }));
-  return { timezone: r.Item?.timezone || null, effectiveTimezone: await getGymTimeZone(tenantId), quietStart: QUIET_START, quietEnd: QUIET_END, ...profileFromItem(r.Item) };
+  // Keep the weekly report's address in step with the owner's verified login
+  // email (looked up from Cognito with their own token, so it can't be spoofed).
+  let reportEmail = r.Item?.reportEmail || null;
+  const email = await fetchOwnerEmail(authHeader);
+  if (email && email !== reportEmail) {
+    await saveSettingsFields(tenantId, { reportEmail: email });
+    reportEmail = email;
+  }
+  return {
+    timezone: r.Item?.timezone || null, effectiveTimezone: await getGymTimeZone(tenantId), quietStart: QUIET_START, quietEnd: QUIET_END,
+    weeklyReport: r.Item?.weeklyReport !== false, reportEmail, ...profileFromItem(r.Item),
+  };
+}
+
+// The owner's verified email from Cognito. GetUser is authorised by the user's
+// own access token, so the Lambda needs no extra IAM permission. Best-effort.
+async function fetchOwnerEmail(authHeader) {
+  const token = /^Bearer\s+(.+)$/i.exec(authHeader || "")?.[1]?.trim();
+  if (!token) return null;
+  try {
+    const res = await httpsRequest({
+      hostname: `cognito-idp.${REGION}.amazonaws.com`, path: "/", method: "POST",
+      headers: { "Content-Type": "application/x-amz-json-1.1", "X-Amz-Target": "AWSCognitoIdentityProviderService.GetUser" },
+    }, JSON.stringify({ AccessToken: token }));
+    if (res.statusCode >= 400) { console.warn("Cognito GetUser failed:", res.statusCode); return null; }
+    const attrs = Object.fromEntries((JSON.parse(res.body).UserAttributes || []).map(a => [a.Name, a.Value]));
+    return attrs.email && attrs.email_verified === "true" ? String(attrs.email).toLowerCase() : null;
+  } catch (e) { console.warn("fetchOwnerEmail failed:", e.message); return null; }
+}
+
+async function saveSettingsFields(tenantId, fields) {
+  const names = { "#t": "type" }, values = { ":type": "settings", ":tid": tenantId, ":now": new Date().toISOString() }, sets = ["#t = :type", "tenantId = :tid", "updatedAt = :now"];
+  Object.entries(fields).forEach(([k, v], i) => { names[`#f${i}`] = k; values[`:f${i}`] = v; sets.push(`#f${i} = :f${i}`); });
+  await dynamo.send(new UpdateCommand({
+    TableName: OUTREACH_TABLE, Key: { logID: settingsKey(tenantId) },
+    UpdateExpression: "SET " + sets.join(", "), ExpressionAttributeNames: names, ExpressionAttributeValues: values,
+  }));
 }
 // Gym profile from the first-run setup (name, avg price, time zone) plus the
 // onboardedAt stamp, all on the same settings item.
@@ -1016,10 +1058,80 @@ async function runScheduledFollowups(now = new Date()) {
   return summary;
 }
 
+// ═══ WEEKLY OWNER REPORT ══════════════════════════════════════════════════════
+// A weekly EventBridge rule (input {"pulseretainJob":"weekly_report"}) emails each
+// gym owner their week: revenue saved, revenue at risk, texts sent, replies and
+// who to contact next. Pure logic lives in weeklyReport.mjs.
+async function sendReportEmail({ to, subject, html, text }) {
+  if (!REPORT_FROM_EMAIL) throw new Error("REPORT_FROM_EMAIL is not set");
+  await ses.send(new SendEmailCommand({
+    Source: `PulseRetain <${REPORT_FROM_EMAIL}>`,
+    Destination: { ToAddresses: [to] },
+    Message: {
+      Subject: { Data: subject, Charset: "UTF-8" },
+      Body: { Html: { Data: html, Charset: "UTF-8" }, Text: { Data: text, Charset: "UTF-8" } },
+    },
+  }));
+}
+
+async function loadGymReportData(tenantId) {
+  const [memberItems, outreachItems] = await Promise.all([
+    scanAllByTenant(MEMBERS_TABLE, tenantId),
+    scanAllByTenant(OUTREACH_TABLE, tenantId),
+  ]);
+  return { memberItems, outreachItems };
+}
+
+async function runWeeklyReports(now = new Date()) {
+  const gyms = [];
+  let ExclusiveStartKey;
+  do {
+    const res = await dynamo.send(new ScanCommand({
+      TableName: OUTREACH_TABLE,
+      FilterExpression: "#t = :s",
+      ExpressionAttributeNames: { "#t": "type" },
+      ExpressionAttributeValues: { ":s": "settings" },
+      ExclusiveStartKey,
+    }));
+    gyms.push(...(res.Items || []));
+    ExclusiveStartKey = res.LastEvaluatedKey;
+  } while (ExclusiveStartKey);
+
+  const summary = await processWeeklyReports(gyms, now, {
+    loadGymData: loadGymReportData,
+    // Conditional write so a retried or duplicate run never emails a gym twice.
+    claimWeek: async (gym, weekId) => {
+      try {
+        await dynamo.send(new UpdateCommand({
+          TableName: OUTREACH_TABLE, Key: { logID: gym.logID },
+          UpdateExpression: "SET lastReportWeek = :w, lastReportAt = :now",
+          ConditionExpression: "attribute_not_exists(lastReportWeek) OR lastReportWeek <> :w",
+          ExpressionAttributeValues: { ":w": weekId, ":now": new Date().toISOString() },
+        }));
+        return true;
+      } catch (e) { if (e.name === "ConditionalCheckFailedException") return false; throw e; }
+    },
+    releaseWeek: (gym) => dynamo.send(new UpdateCommand({
+      TableName: OUTREACH_TABLE, Key: { logID: gym.logID },
+      UpdateExpression: "SET lastReportWeek = :prev",
+      ExpressionAttributeValues: { ":prev": gym.lastReportWeek || "none" },
+    })),
+    sendEmail: sendReportEmail,
+    dashboardUrl: DASHBOARD_URL,
+  });
+  console.log("weekly reports:", JSON.stringify(summary));
+  return summary;
+}
+
 // ─── Main handler ─────────────────────────────────────────────────────────────
 export const handler = async (event) => {
   // ── Scheduled run (EventBridge) — sends due follow-ups. Function URL calls
   // always carry requestContext, so this branch can't be triggered from the web.
+  // The weekly rule passes constant input {"pulseretainJob":"weekly_report"}; it
+  // is checked first because the hourly rule's default event also says aws.events.
+  if (!event.requestContext && event.pulseretainJob === REPORT_JOB) {
+    return runWeeklyReports();
+  }
   if (!event.requestContext && (event.source === "aws.events" || event.pulseretainJob === "send_followups")) {
     try { return await runScheduledFollowups(); }
     catch (e) { console.error("scheduled follow-up run failed:", e); emitMetric("FollowupRunFailed"); throw e; }
@@ -1079,8 +1191,8 @@ export const handler = async (event) => {
   // Verify the Cognito access token and derive the tenantId that scopes all of
   // this request's data access. No valid token → 401, and no data is touched.
   let tenantId;
+  const authHeader = event.headers?.authorization || event.headers?.Authorization;
   try {
-    const authHeader = event.headers?.authorization || event.headers?.Authorization;
     tenantId = await verifyTokenAndGetTenant(authHeader);
   } catch (e) {
     console.warn("Auth rejected:", e.message);
@@ -1404,7 +1516,29 @@ export const handler = async (event) => {
 
     // ── Routes: gym settings (time zone for quiet hours + follow-up timing) ──
     if (body.action === "get_settings") {
-      return { statusCode: 200, headers: { ...CORS, "Content-Type": "application/json" }, body: JSON.stringify(await getGymSettings(tenantId)) };
+      return { statusCode: 200, headers: { ...CORS, "Content-Type": "application/json" }, body: JSON.stringify(await getGymSettings(tenantId, authHeader)) };
+    }
+
+    // ── Routes: weekly email report ─────────────────────────────────────────
+    if (body.action === "save_report_prefs") {
+      if (typeof body.weeklyReport !== "boolean") return { statusCode: 400, headers: CORS, body: JSON.stringify({ error: "weeklyReport must be true or false" }) };
+      await saveSettingsFields(tenantId, { weeklyReport: body.weeklyReport });
+      return { statusCode: 200, headers: { ...CORS, "Content-Type": "application/json" }, body: JSON.stringify({ success: true, weeklyReport: body.weeklyReport }) };
+    }
+    if (body.action === "send_test_report") {
+      // Sends this week's report now to the owner's own verified login email.
+      const to = await fetchOwnerEmail(authHeader);
+      if (!to) return { statusCode: 400, headers: CORS, body: JSON.stringify({ error: "Your login email isn't verified yet, so there's nowhere to send the report." }) };
+      if (!(await consumeQuota(tenantId, "report", DAILY_TEST_REPORT_LIMIT))) return quotaExceeded("test report", DAILY_TEST_REPORT_LIMIT);
+      const settingsItem = (await dynamo.send(new GetCommand({ TableName: OUTREACH_TABLE, Key: { logID: settingsKey(tenantId) } }))).Item || {};
+      const report = buildWeeklyReport({ ...(await loadGymReportData(tenantId)), now: new Date(), timezone: await getGymTimeZone(tenantId), gymName: settingsItem.gymName });
+      if (!report) return { statusCode: 400, headers: CORS, body: JSON.stringify({ error: "Nothing to report yet. Import your roster first." }) };
+      await sendReportEmail({
+        to, subject: weeklyReportSubject(report),
+        html: renderWeeklyReportHtml(report, { dashboardUrl: DASHBOARD_URL }),
+        text: renderWeeklyReportText(report, { dashboardUrl: DASHBOARD_URL }),
+      });
+      return { statusCode: 200, headers: { ...CORS, "Content-Type": "application/json" }, body: JSON.stringify({ success: true, sentTo: to }) };
     }
     if (body.action === "save_settings") {
       const tz = String(body.timezone || "");

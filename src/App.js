@@ -566,6 +566,8 @@ export default function App() {
   const [scheduledIds, setScheduledIds] = useState(new Set());
   const [followupDue, setFollowupDue]   = useState({});   // member id → ISO time the follow-up text goes out
   const [gymTz, setGymTz]               = useState(null); // gym's time zone (quiet hours + follow-up timing)
+  const [reportPrefs, setReportPrefs]   = useState(null); // { weeklyReport, reportEmail } for the Monday email
+  const [testReportBusy, setTestReportBusy] = useState(false);
   const [gymProfile, setGymProfile]     = useState(null); // { gymName, avgPrice, onboardedAt } from first-run setup
   const [savedCounts, setSavedCounts]   = useState(null); // { members, outreach } on the server at sign-in
   const [onboarding, setOnboarding]     = useState(null); // null = undecided, "open", "closed"
@@ -660,6 +662,7 @@ export default function App() {
           tz = r.ok ? browserTz : settings.effectiveTimezone;
         }
         if (!cancelled) setGymTz(tz || settings.effectiveTimezone || null);
+        if (!cancelled && typeof settings.weeklyReport === "boolean") setReportPrefs({ weeklyReport: settings.weeklyReport, reportEmail: settings.reportEmail || null });
         if (!cancelled && "onboardedAt" in settings) setGymProfile({ gymName: settings.gymName, avgPrice: settings.avgPrice, onboardedAt: settings.onboardedAt, timezone: tz });
         const { followups = [] } = await (await apiFetch({ action: "list_followups" })).json();
         if (cancelled) return;
@@ -683,6 +686,33 @@ export default function App() {
     } catch (err) {
       setGymTz(prev);
       showToast(`Couldn't save time zone: ${err.message}`);
+    }
+  }
+
+  async function toggleWeeklyReport(on) {
+    const prev = reportPrefs;
+    setReportPrefs(p => ({ ...p, weeklyReport: on }));
+    try {
+      const r = await apiFetch({ action: "save_report_prefs", weeklyReport: on });
+      if (!r.ok) throw await serverError(r);
+      showToast(on ? "Weekly email report turned on" : "Weekly email report turned off");
+    } catch (err) {
+      setReportPrefs(prev);
+      showToast(`Couldn't save: ${err.message}`);
+    }
+  }
+
+  async function sendTestReport() {
+    setTestReportBusy(true);
+    try {
+      const r = await apiFetch({ action: "send_test_report" });
+      if (!r.ok) throw await serverError(r);
+      const { sentTo } = await r.json();
+      showToast(`This week's report is on its way to ${sentTo}`);
+    } catch (err) {
+      showToast(`Couldn't send the report: ${err.message}`);
+    } finally {
+      setTestReportBusy(false);
     }
   }
 
@@ -1603,6 +1633,19 @@ export default function App() {
                           {timeZoneOptions(gymTz).map(z => <option key={z} value={z}>{z.replace(/_/g, " ")}</option>)}
                         </select>
                       </label>
+                    )}
+                    {!IS_DEMO && reportPrefs && (
+                      <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 8, fontSize: 13, color: T.muted, flexWrap: "wrap" }}>
+                        <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}>
+                          <input type="checkbox" checked={reportPrefs.weeklyReport} onChange={e => toggleWeeklyReport(e.target.checked)} />
+                          Weekly email report{reportPrefs.reportEmail ? ` to ${reportPrefs.reportEmail}` : ""}, Mondays
+                        </label>
+                        {reportPrefs.reportEmail && (
+                          <button onClick={sendTestReport} disabled={testReportBusy} style={{ background: "none", border: "none", padding: 0, fontFamily: SANS, fontSize: 13, color: T.purple, textDecoration: "underline", cursor: testReportBusy ? "default" : "pointer" }}>
+                            {testReportBusy ? "Sending..." : "Send me this week's now"}
+                          </button>
+                        )}
+                      </div>
                     )}
                   </div>
                   {outreachLog.length > 0 && <button onClick={exportOutreachCSV} aria-label="Export outreach log as CSV" style={btn("secondary")}>Export CSV</button>}
